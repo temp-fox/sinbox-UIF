@@ -327,18 +327,29 @@ import {
   In2Out
 } from '@/store/uif/parser/uif_in_2_out';
 
-export function BuildEnableOutList(res, outbounds) {
+export function BuildEnableOutList(res, outbounds, subscriptions = []) {
   var urlTestTag = "autoSelete"
   var i = uif.state.config.urlTest.interval + "m"
   var urltest = {
-    "type": "urltest",
-    "tag": urlTestTag,
-    "outbounds": [],
-    "url": uif.state.config.urlTest.testURL,
-    "interval": i,
-    "idle_timeout": i,
-    "tolerance": parseInt(uif.state.config.urlTest.tolerance)
-
+    type: 'urltest',
+    tag: urlTestTag,
+    outbounds: [],
+    url: uif.state.config.urlTest.testURL,
+    interval: i,
+    idle_timeout: i,
+    tolerance: parseInt(uif.state.config.urlTest.tolerance),
+  }
+  var groups = {}
+  for (var sub of subscriptions) {
+    if (!sub || !sub.id) continue
+    var groupTag = `sub::${sub.id}::urltest`
+    var groupNodes = (sub.outbounds || []).filter((node) => node.enabled && !node.quarantined).map((node) => node.core_tag || node.tag)
+    if (groupNodes.length > 1) {
+      res['outbounds'].push({ type: 'urltest', tag: groupTag, outbounds: groupNodes, url: uif.state.config.urlTest.testURL, interval: i, idle_timeout: i, tolerance: parseInt(uif.state.config.urlTest.tolerance) })
+      groups[sub.id] = groupTag
+    } else if (groupNodes.length === 1) {
+      groups[sub.id] = groupNodes[0]
+    }
   }
   var proxy = res['outbounds'][0]
   var enabledOutTag = []
@@ -382,7 +393,7 @@ export function SetOutboud(res, boundConfig, isShare) {
       item['enabled'] = false
     }
   }
-  BuildEnableOutList(res, all_out)
+  BuildEnableOutList(res, all_out, boundConfig.subscribe)
 }
 
 export function SetProxyStyle(res, uifConfig) {
@@ -557,49 +568,38 @@ export function AddRouteList(res, uifConfig, routeList, isShare) {
   }
 
   var usedRulesTag = {}
-  for (var item in route) {
-    item = route[item]
+  for (var item of route) {
     var usingSeletor = NewSelector(enabledOutTagList)
     var outTag = item['tag']
     var ruleTag = "Rules::" + outTag
-    if (!(outTag in usedRulesTag)) {
-      usedRulesTag[outTag] = 0
-    }
-    if (outTag in usedRulesTag) {
-      var temp = usedRulesTag[outTag]
-      if (temp != 0) {
-        ruleTag += temp
-      }
-    }
+    if (!(outTag in usedRulesTag)) usedRulesTag[outTag] = 0
+    if (usedRulesTag[outTag] !== 0) ruleTag += usedRulesTag[outTag]
     usedRulesTag[outTag] += 1
     usingSeletor['tag'] = ruleTag
     var out = item['outbound']
-    if ('id' in item) {
-      var id = item['id'][item['id'].length - 1]
+    if (item.target && item.target.kind === 'subscription') {
+      const groupTag = `sub::${item.target.subscription_id}::urltest`
+      const sub = (uifConfig.subscriptions || []).find((entry) => entry.id === item.target.subscription_id)
+      if (sub && res.outbounds.some((entry) => entry.tag === groupTag)) out = groupTag
+    } else if (Array.isArray(item.id) && item.id.length) {
+      var id = item.id[item.id.length - 1]
       if (['freedom', 'proxy', 'block'].includes(id)) {
         out = id
       } else {
-        id = FindOutByID(id)
-        if (id != null && id['enabled']) {
-          if (isShare && ['wireguard'].includes(id['protocol'])) {
-            out = 'proxy'
-          } else {
-            out = id['core_tag']
-          }
+        var selected = FindOutByID(id)
+        if (selected && selected.enabled) {
+          out = isShare && selected.protocol === 'wireguard' ? 'proxy' : selected.core_tag
         } else {
           out = 'proxy'
         }
       }
     }
-    if (out == 'block') {
-      item['action'] = 'reject'
+    if (out === 'block') {
+      item.action = 'reject'
     } else {
-      item['outbound'] = ruleTag
-    }
-    item['_realOut'] = out
-    if (out != 'block') {
-      usingSeletor['default'] = out
-      res['outbounds'].push(usingSeletor)
+      item.outbound = ruleTag
+      usingSeletor.default = out
+      res.outbounds.push(usingSeletor)
     }
   }
   for (var item in route) {
@@ -848,7 +848,7 @@ export function BuildCoreConfig(uifConfig, boundConfig, useHttpApi, isShare) {
   SetOutboud(coreConfig, boundConfig, isShare)
   SetProxyStyle(coreConfig, uifConfig)
   SetGeo(coreConfig, uifConfig.geoIPAddress, uifConfig.geoSiteAddress)
-  AddRouteList(coreConfig, uifConfig, boundConfig.routes, isShare)
+  AddRouteList(coreConfig, { ...uifConfig, subscriptions: boundConfig.subscribe }, boundConfig.routes, isShare)
   SetDNS(coreConfig, uifConfig, isShare)
 
   if (useHttpApi) {

@@ -34,13 +34,13 @@
             {{ $translator({ cn: "更新订阅", en: "Update" }) }}
           </el-dropdown-item>
 
-          <!-- <el-dropdown-item -->
-          <!--   @click.native="SpeedTest" -->
-          <!--   icon="el-icon-odometer" -->
-          <!--   v-if="!isSimple" -->
-          <!-- > -->
-          <!--   {{ $translator({ cn: "测全部延迟", en: "Test All Delay" }) }} -->
-          <!-- </el-dropdown-item> -->
+          <el-dropdown-item
+            @click.native="SpeedTest"
+            icon="el-icon-odometer"
+            v-if="!isSimple"
+          >
+            {{ $translator({ cn: "测速并清理", en: "Probe and Clean" }) }}
+          </el-dropdown-item>
 
           <el-dropdown-item
             divided
@@ -268,6 +268,10 @@ export default {
     },
     SpeedTest() {
       uif_store.actions.TestNode(this.subscribe_item_info.outbounds);
+      this.$message({
+        type: "info",
+        message: "测速已启动，完成后会更新节点延迟；失败节点不会立即删除。",
+      });
     },
     ChangeAllNodeStatus(res) {
       for (var item in this.subscribe_item_info.outbounds) {

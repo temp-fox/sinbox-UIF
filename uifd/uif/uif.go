@@ -328,8 +328,10 @@ func GetKey() string {
 	return PrivateKey
 }
 
+// 适配 WT 下游模式时，访问控制由 WT/Droidspaces 网络边界负责。
+// API 通过局域网端口提供给面板使用，不再要求 UIF 管理密码。
 func IsNeedKey() bool {
-	return !strings.Contains(GetAPIAddress(), "127.0.0.1:")
+	return false
 }
 
 func UnixChmod() {

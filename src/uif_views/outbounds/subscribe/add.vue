@@ -20,10 +20,27 @@
         ></el-input>
       </el-form-item>
 
-      <el-form-item label="自动更新间隔" v-if="false">
-        <el-select v-model="uif.subscribe.info.updateGap">
-          <el-option label="每次启动UIF" value="0"></el-option>
+      <el-form-item label="自动更新间隔">
+        <el-select v-model.number="uif.subscribe.info.policy.update_interval_sec">
+          <el-option label="关闭" :value="0"></el-option>
+          <el-option label="每 1 小时" :value="3600"></el-option>
+          <el-option label="每 5 小时" :value="18000"></el-option>
+          <el-option label="每天" :value="86400"></el-option>
         </el-select>
+      </el-form-item>
+
+      <el-form-item label="更新模式">
+        <el-radio v-model="uif.subscribe.info.policy.update_mode" label="merge">增量合并</el-radio>
+        <el-radio v-model="uif.subscribe.info.policy.update_mode" label="replace">覆盖更新</el-radio>
+      </el-form-item>
+
+      <el-form-item label="自动测速">
+        <el-switch v-model="uif.subscribe.info.probe.enabled"></el-switch>
+      </el-form-item>
+
+      <el-form-item label="测速阈值" v-if="uif.subscribe.info.probe.enabled">
+        <el-input-number v-model="uif.subscribe.info.probe.threshold_ms" :min="1" :max="60000"></el-input-number>
+        <span>毫秒</span>
       </el-form-item>
 
       <el-form-item :label="$translator({ cn: '导入方式', en: 'Import type' })">

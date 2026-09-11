@@ -7,6 +7,12 @@ function Bound(uif_config) {
   var singBoxStyle = DeepCopy(uif_config['setting']);
   var transport = uif_config['transport']
   var proxyProtocol = uif_config['protocol']
+  // WT/OpenWRT 没有桌面环境:混合入站若携带 set_system_proxy=true,
+  // sing-box 会在启动时因 unsupported desktop environment 直接退出。
+  // 该分支的系统代理由 WT 的 legacy iptables TPROXY 管理,不能请求桌面代理。
+  if (proxyProtocol === 'mixed') {
+    delete singBoxStyle.set_system_proxy
+  }
   var transportProtocol = transport['protocol'];
 
   singBoxStyle['type'] = proxyProtocol;

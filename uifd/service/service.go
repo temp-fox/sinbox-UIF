@@ -43,7 +43,7 @@ func BuildAllowedDomain(r *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	trustedDomain := []string{"uiforfreedom.github.io", "127.0.0.1", "localhost", "ui4freedom.org"}
+	trustedDomain := []string{"uiforfreedom.github.io", "127.0.0.1", "localhost", "ui4freedom.org", "192.168.0.230"}
 	for _, v := range trustedDomain {
 		if strings.HasSuffix(url.Hostname(), v) {
 			return "*"
@@ -86,7 +86,8 @@ func CheckPassword(w http.ResponseWriter, r *http.Request) bool {
 			isPass = true
 		}
 	} else {
-		isPass = allowedDomain == "*"
+		// WT 下游模式由 WT/Droidspaces 网络边界限制访问，UIF 不要求密码。
+		isPass = true
 	}
 	return isPass
 }

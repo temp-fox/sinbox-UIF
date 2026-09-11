@@ -530,7 +530,7 @@ export default {
       var sub = res[4]["children"];
       for (var i in this.config.config.subscribe) {
         i = this.config.config.subscribe[i];
-        var subOut = [];
+        var subOut = [{ value: `subscription:${i.id}`, label: `${i.tag}（自动选优）` }];
         for (var j in i["outbounds"]) {
           j = i["outbounds"][j];
           if (!j["enabled"]) {
@@ -584,6 +584,10 @@ export default {
           message: "条件不能为空！",
         });
         return;
+      }
+      if (this.uif.route.info.outbound && this.uif.route.info.outbound.indexOf("subscription:") === 0) {
+        const subscriptionId = this.uif.route.info.outbound.slice("subscription:".length);
+        this.uif.route.info.target = { kind: "subscription", subscription_id: subscriptionId };
       }
       if (this.uif.route.isAdding) {
         this.uif.route.all_list.push(this.uif.route.info);

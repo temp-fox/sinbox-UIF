@@ -1,6 +1,7 @@
 import {v4 as uuidv4} from "uuid";
 
-import {DeepCopy} from "@/utils";
+import { DeepCopy } from "@/utils";
+import { subscriptionDefaults } from "./parser/subscription";
 
 import uif from "./uif";
 
@@ -75,6 +76,7 @@ var subscribe = {
   updateGap: "0",
   enabled: false,
   isCollapsed: false,
+  ...DeepCopy(subscriptionDefaults),
   extra: {
     openWebURL: "",
     traffic: {
@@ -118,7 +120,6 @@ export function newDefaultHttpIn() {
   res.transport.address = "127.0.0.1";
   res.transport.port = 9110;
   res.id = uuidv4();
-  res.setting.set_system_proxy = true;
   return res;
 }
 

@@ -56,7 +56,7 @@ func HTTPWithProxyPort(dst string, proxyPort string,
 		// not to use proxy
 		httpProxyAddress = nil
 	}
-	client := &http.Client{Transport: &http.Transport{Proxy: httpProxyAddress}, Timeout: 12 * time.Second}
+	client := &http.Client{Transport: &http.Transport{Proxy: httpProxyAddress}, Timeout: 60 * time.Second}
 	if data == "" {
 		data = "{}"
 	}
@@ -183,7 +183,7 @@ func HTTPMutiple(dst string) *HTTPRes {
 	// 超时 goroutine
 	go func() {
 		select {
-		case <-time.After(20 * time.Second):
+		case <-time.After(120 * time.Second):
 			select {
 			case ch <- &HTTPRes{Error: errors.New("Timeout! Failed to get data"), IsTimeout: true}:
 			case <-ctx.Done():

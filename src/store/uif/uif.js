@@ -27,6 +27,7 @@ import {
   buildInboundPorts,
   validateEnabledInbounds,
 } from "./parser/inbound_validation";
+import { mergeSubscriptionNodes } from "./parser/subscription";
 
 import {
   BuildCoreConfig,
@@ -63,7 +64,7 @@ import {
 } from "@/utils/auth";
 
 var defaultState = {
-  apiAddress: "http://127.0.0.1:9413",
+  apiAddress: "http://192.168.0.230:9413",
   password: "",
 
   showToolTip: false,
@@ -1255,7 +1256,11 @@ async function UpdateSub2(info, isUpdatingExtraData) {
     item["core_tag"] = "";
     item["id"] = uuidv4();
   }
-  info.outbounds = outList;
+  info.outbounds = mergeSubscriptionNodes(
+    info.outbounds || [],
+    outList,
+    info.policy && info.policy.update_mode === "replace" ? "replace" : "merge",
+  );
   return true;
 }
 
