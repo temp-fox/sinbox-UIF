@@ -19,6 +19,9 @@
         {{ subscribe_item_info.outbounds.length }}
         <el-divider direction="vertical"></el-divider>
         {{ LastUpdateTime() }}
+        <el-tag size="mini" :type="subscribe_item_info.last_update_status === 'failed' ? 'danger' : 'info'">
+          {{ subscribe_item_info.last_update_status || 'unknown' }}
+        </el-tag>
       </span>
 
       <el-dropdown

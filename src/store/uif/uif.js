@@ -29,6 +29,9 @@ import {
 } from "./parser/inbound_validation";
 import { mergeSubscriptionNodes } from "./parser/subscription";
 
+var subscriptionTimer = null;
+var subscriptionJobs = {};
+
 import {
   BuildCoreConfig,
   BuildShareCoreConfig,
@@ -408,6 +411,36 @@ function UpdateInfo(res) {
   }
   ClashConnection();
   StartClock(); // update next time.
+}
+
+function StartSubscriptionScheduler() {
+  if (subscriptionTimer) return;
+  subscriptionTimer = setInterval(() => {
+    if (!state.connection.isConnected) return;
+    const now = Date.now();
+    for (const sub of configObj.state.config.subscribe || []) {
+      const policy = sub.policy || {};
+      const interval = Number(policy.update_interval_sec || 0);
+      if (!policy.update_enabled || interval <= 0 || subscriptionJobs[sub.id]) continue;
+      if (now - Number(sub.last_update_at || sub.updateTime || 0) < interval * 1000) continue;
+      subscriptionJobs[sub.id] = true;
+      const previous = state.subscribe.info;
+      state.subscribe.info = sub;
+      UpdateSub2(sub, false).finally(() => {
+        sub.last_update_at = Date.now();
+        subscriptionJobs[sub.id] = false;
+        state.subscribe.info = previous;
+        SaveUIFConfig();
+        ApplyCoreConfig();
+      });
+    }
+  }, 3000);
+}
+
+function StopSubscriptionScheduler() {
+  if (subscriptionTimer) clearInterval(subscriptionTimer);
+  subscriptionTimer = null;
+  subscriptionJobs = {};
 }
 
 async function heartBeat() {
@@ -1058,6 +1091,7 @@ function Connect() {
       }
 
       UpdateInfo(res);
+      StartSubscriptionScheduler();
       SetKey(state.password);
       SetAPIAddress(state.apiAddress);
       SetSession({
@@ -1110,8 +1144,9 @@ function Connect() {
 
 function DisConnect() {
   Notification.closeAll();
-  state.connection.isConnected = false;
+      state.connection.isConnected = false;
   state.connection.isConnecting = false;
+  StopSubscriptionScheduler();
 }
 
 function Ping(row) {
