@@ -26,10 +26,13 @@ type Job struct {
 	StartedAt      time.Time `json:"started_at,omitempty"`
 	FinishedAt     time.Time `json:"finished_at,omitempty"`
 	Error          string    `json:"error,omitempty"`
+	Result         string    `json:"result,omitempty"`
 }
 
 // JobFunc 是单个订阅任务的执行回调。回调应监听 ctx.Done，以便停止正在运行的任务。
 type JobFunc func(context.Context) error
+
+type ResultFunc func(context.Context) (string, error)
 
 // ManagerOption 配置 Manager。
 type ManagerOption func(*Manager)
@@ -94,7 +97,24 @@ func (m *Manager) SetCallback(fn JobFunc) {
 	m.mu.Unlock()
 }
 
-// Start 提交一个任务。subscription ID 非空时，已有 queued/running 任务会直接返回，避免重复进入。
+// StartResult runs a callback that can return a small result payload.
+func (m *Manager) StartResult(ctx context.Context, id, kind string, fn ResultFunc) *Job {
+	if fn == nil {
+		return m.Start(ctx, id, kind, nil)
+	}
+	return m.Start(ctx, id, kind, func(runCtx context.Context) error {
+		result, err := fn(runCtx)
+		m.mu.Lock()
+		if jobID := m.active[id]; jobID != "" {
+			if job := m.jobs[jobID]; job != nil {
+				job.Result = result
+			}
+		}
+		m.mu.Unlock()
+		return err
+	})
+}
+
 func (m *Manager) Start(ctx context.Context, id, kind string, fn JobFunc) *Job {
 	if ctx == nil {
 		ctx = context.Background()

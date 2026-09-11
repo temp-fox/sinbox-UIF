@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -199,10 +200,22 @@ func Service(w http.ResponseWriter, r *http.Request) {
 	} else if path == "/subscriptions/job" {
 		id := r.FormValue("subscription_id")
 		kind := r.FormValue("kind")
-		// The manager callback is intentionally a no-op until a subscription
-		// parser is wired in. Do not bind this background job to the request
-		// context: net/http cancels it as soon as the response is written.
-		job := subscriptionJobs.Start(nil, id, kind, nil)
+		dst := r.FormValue("dst")
+		job := subscriptionJobs.StartResult(nil, id, kind, func(ctx context.Context) (string, error) {
+			if dst == "" {
+				return "", fmt.Errorf("subscription URL is empty")
+			}
+			result, _, err := uif.HTTPGetDirect(dst)
+			if err != nil {
+				return "", err
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			default:
+				return result, nil
+			}
+		})
 		payload, _ := json.Marshal(job)
 		res = string(payload)
 	} else if path == "/subscriptions/job/status" {
