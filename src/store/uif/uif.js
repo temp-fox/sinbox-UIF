@@ -1442,7 +1442,11 @@ function TestNode(uifStyleNodeConfig) {
           item.last_probe_status = "slow";
           item.consecutive_failures = Number(item.consecutive_failures || 0) + 1;
           item.quarantined = item.consecutive_failures >= Number(policy.max_consecutive_failures || 3);
-          if (policy.failure_action === "delete" && item.quarantined) item.enabled = false;
+          if (policy.failure_action === "delete" && item.quarantined) {
+          const enabledNodes = uifStyleNodeConfig.filter((node) => node.enabled && !node.quarantined).length;
+          const minKeep = Math.max(1, Number(policy.min_keep || 1));
+          if (enabledNodes > minKeep) item.enabled = false;
+        }
         } else {
           item.delay = data["delay"].toString();
           item.last_probe_delay_ms = Number(data["delay"]);
