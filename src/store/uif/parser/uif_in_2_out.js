@@ -39,7 +39,7 @@ export function In2Out(inputJson) {
     throw 'can not share address 127.0.0.1; Please set it to 0.0.0.0'
   }
 
-  if (['tun', 'http', 'socks', 'mixed'].includes(proxyProtocol)) {
+  if (['tun', 'tproxy', 'http', 'socks', 'mixed'].includes(proxyProtocol)) {
     throw 'Can not share protocol ' + proxyProtocol
   }
 

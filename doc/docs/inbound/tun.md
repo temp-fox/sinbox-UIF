@@ -21,7 +21,10 @@ import ReactPlayer from 'react-player'
 使用 Tun 网卡需要管理员权限。目前 UIF 支持 Windows 和 Linux 自动启动并提权（全自动）
 :::
 
-## 开启/关闭
+:::warning
+在 RMX5062 Android 15 + Droidspaces 的 WT 下游架构中，不要把 Tun VPN 与 WT 的全量 legacy iptables TPROXY 同时启用。此环境应使用单独的 [WT Legacy TPROXY](./wt-tproxy.md) 入站：WT 负责流量接管，UIF 只监听 sing-box `tproxy` 端口，不依赖 nftables。
+:::
+
 
 **在 Windows、Macos 中因为要提权，未启用时都需要重启 UIF：**
 

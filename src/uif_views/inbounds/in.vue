@@ -172,6 +172,15 @@ export default {
       SaveUIFConfig: "uif/SaveUIFConfig",
     }),
     ShareIn(index, row) {
+      if (row.protocol == "tproxy") {
+        this.$message.error(
+          this.$translator({
+            cn: "WT TPROXY 入站不支持分享！",
+            en: "WT TPROXY inbound cannot be shared.",
+          }),
+        );
+        return;
+      }
       this.uif.share.isSingle = true;
       try {
         var res = In2Out(row);
@@ -191,6 +200,9 @@ export default {
     BuildPath(row) {
       if (row.protocol == "tun") {
         return "*";
+      }
+      if (row.protocol == "tproxy") {
+        return `${row.transport.address}:${row.transport.port}`;
       }
       var res = row.transport.port;
       if (row.transport.protocol == "ws") {

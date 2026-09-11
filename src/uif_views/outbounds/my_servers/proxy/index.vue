@@ -91,6 +91,11 @@
     <http v-if="outbound_obj.protocol == 'http'" :outbound_obj="outbound_obj" />
 
     <tun v-if="outbound_obj.protocol == 'tun'" :outbound_obj="outbound_obj" />
+
+    <tproxy
+      v-if="outbound_obj.protocol == 'tproxy'"
+      :outbound_obj="outbound_obj"
+    />
   </div>
 </template>
 
@@ -106,6 +111,7 @@ import shadowtls from "./shadow.vue";
 import hysteria from "./hysteria.vue";
 import hysteria2 from "./hysteria2.vue";
 import tun from "./tun.vue";
+import tproxy from "./tproxy.vue";
 import Wireguard from "./wireguard.vue";
 import http from "./http.vue";
 import mixed from "./mixed.vue";
@@ -126,6 +132,7 @@ export default {
     shadowtls,
     hysteria,
     tun,
+    tproxy,
     tuic,
     Wireguard,
   },
@@ -148,6 +155,13 @@ export default {
         this.outbound_obj.transport.tls_type = "tls";
       } else {
         this.outbound_obj.transport.tls_type = "none";
+      }
+      if (this.outbound_obj.protocol == "tproxy") {
+        this.outbound_obj.transport.address = "0.0.0.0";
+        this.outbound_obj.transport.port = 7895;
+        this.outbound_obj.transport.protocol = "tcp";
+        this.outbound_obj.transport.tls_type = "none";
+        this.outbound_obj.transport.tls = {};
       }
     },
     GetUsableProxy() {
@@ -178,6 +192,7 @@ export default {
         "tun",
         "tuic",
         "mixed",
+        "tproxy",
       ];
     } /*}}}*/,
   },

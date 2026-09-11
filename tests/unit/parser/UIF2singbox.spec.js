@@ -4,8 +4,41 @@ import {
   Outbound
 } from '@/store/uif/parser/uif2singbox.js'
 
+import {
+  AddInboudList,
+} from '@/uif/template/tun_fakeip.js'
+
 describe('parser:parse to singBoxStyle config', () => {
-  it('trojan tcp no tls inbound', () => {
+  it('template tproxy emits only a minimal non-TUN inbound', () => {
+    const config = AddInboudList([{
+      enabled: true,
+      protocol: 'tproxy',
+      tag: 'WT',
+      transport: {
+        protocol: 'tcp',
+        tls_type: 'none',
+        tls: {},
+        address: '0.0.0.0',
+        port: '7895',
+      },
+      setting: {
+        auto_route: true,
+        auto_redirect: true,
+        interface_name: 'bad0',
+        stack: 'gvisor',
+      },
+    }], 'ipv4_only')
+    expect(config.inbounds).toContainEqual({
+      type: 'tproxy',
+      tag: 'WT0',
+      listen: '0.0.0.0',
+      listen_port: 7895,
+    })
+    expect(JSON.stringify(config.inbounds)).not.toContain('auto_route')
+    expect(JSON.stringify(config.inbounds)).not.toContain('auto_redirect')
+    expect(JSON.stringify(config.inbounds)).not.toContain('interface_name')
+  })
+
     var rawData = {
       protocol: "trojan",
       tag: "1",

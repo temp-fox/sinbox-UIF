@@ -55,7 +55,7 @@
         <el-collapse-item
           :title="$translator({ cn: '传输设置', en: 'Transport Settings' })"
           name="3"
-          v-if="uif.pannel.info.protocol != 'tun'"
+          v-if="uif.pannel.info.protocol != 'tun' && uif.pannel.info.protocol != 'tproxy'"
         >
           <transport :outbound_obj="uif.pannel.info" />
         </el-collapse-item>
@@ -63,7 +63,7 @@
         <el-collapse-item
           :title="$translator({ cn: '拨号设置', en: 'Dial Settings' })"
           name="4"
-          v-if="uif.pannel.info.protocol != 'tun'"
+          v-if="uif.pannel.info.protocol != 'tun' && uif.pannel.info.protocol != 'tproxy'"
         >
           <dial :outbound_obj="uif.pannel.info" />
         </el-collapse-item>

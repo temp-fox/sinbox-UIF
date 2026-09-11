@@ -24,6 +24,11 @@ import {
 } from "@/utils";
 
 import {
+  buildInboundPorts,
+  validateEnabledInbounds,
+} from "./parser/inbound_validation";
+
+import {
   BuildCoreConfig,
   BuildShareCoreConfig,
   DEFAULT_DNS_LOCAL,
@@ -840,47 +845,47 @@ function ApplyCoreConfig() {
   if (!state.connection.isConnected) {
     return;
   }
-  var coreConfig = BuildCoreConfig(
-    state.config,
-    configObj.state.config,
-    true,
-    false,
-  );
+  try {
+    validateEnabledInbounds(configObj.state.config.inbounds);
+    var coreConfig = BuildCoreConfig(
+      state.config,
+      configObj.state.config,
+      true,
+      false,
+    );
+    var inboudPorts = buildInboundPorts(coreConfig);
 
-  var inboudPorts = [];
-  for (var item in coreConfig["inbounds"]) {
-    item = coreConfig["inbounds"][item];
-    if (item["listen"] != "127.0.0.1" && "listen_port" in item) {
-      inboudPorts.push(item["listen_port"].toString());
+    var clash = state.config.clash;
+    if (clash.enabled && !clash.apiIP.includes("127.0.0.1")) {
+      inboudPorts.push(clash.apiPort.toString());
     }
-  }
 
-  var clash = state.config.clash;
-  if (clash.enabled && !clash.apiIP.includes("127.0.0.1")) {
-    inboudPorts.push(clash.apiPort.toString());
-  }
-
-  var content = {
-    config: coreConfig,
-    inboudPorts: inboudPorts,
-  };
-  MyPost(state.apiAddress + "/run_core", content)
-    .then(function (_) {
-      Message({
-        type: "success",
-        message: Translator({
-          cn: "内核已更新！",
-          en: "Core Updated.",
-        }),
+    var content = {
+      config: coreConfig,
+      inboudPorts: inboudPorts,
+    };
+    MyPost(state.apiAddress + "/run_core", content)
+      .then(function (_) {
+        Message({
+          type: "success",
+          message: Translator({
+            cn: "内核已更新！",
+            en: "Core Updated.",
+          }),
+        });
+        ClashConnection();
+      })
+      .catch(function (error) {
+        console.log(error);
+        Message.error({
+          message: "Core Update Failed: " + error,
+        });
       });
-      ClashConnection();
-    })
-    .catch(function (error) {
-      console.log(error);
-      Message.error({
-        message: "Core Update Failed: " + error,
-      });
+  } catch (error) {
+    Message.error({
+      message: "Core Update Failed: " + error.message,
     });
+  }
 }
 
 // save and apply UIF config, then apply this config to core config.

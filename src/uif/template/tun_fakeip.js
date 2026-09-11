@@ -3,6 +3,8 @@ import {
   Outbound
 } from '@/store/uif/parser/uif2singbox.js'
 
+import { normalizePort, validateEnabledInbounds } from '@/store/uif/parser/inbound_validation'
+
 import URLParser from 'url-parse'
 
 import {
@@ -267,33 +269,43 @@ export function AddTun(res, config) {
   res['inbounds'].push(tun)
 }
 
+export function AddTproxy(res, config, index) {
+  const listen = config.transport && config.transport.address
+  if (typeof listen !== 'string' || listen.trim() === '') {
+    throw new Error(`tproxy inbound ${config.tag || index} requires a listen address`)
+  }
+  res['inbounds'].push({
+    type: 'tproxy',
+    tag: `${config.tag || 'tproxy'}${index}`,
+    listen,
+    listen_port: normalizePort(config.transport && config.transport.port),
+  })
+}
+
 export function AddInboudList(inboundList, domain_strategy) {
   var res = DeepCopy(template)
+  validateEnabledInbounds(inboundList)
   var existPort = [];
   var i = 0
-  for (var item in inboundList) {
-    item = inboundList[item]
+  for (var item of (inboundList || [])) {
     if (!item['enabled']) {
       continue;
     }
-    var port = item['transport']['port']
+    var port = normalizePort(item['transport'] && item['transport']['port'])
     if (existPort.includes(port)) {
-      // throw 'duplicated port.'
-      continue
+      throw new Error(`inbound port ${port} is duplicated`)
     }
     existPort.push(port);
     var p = item['protocol']
 
     if (p == 'tun') {
       AddTun(res, item)
+    } else if (p == 'tproxy') {
+      AddTproxy(res, item, i)
+      item['core_tag'] = `${item['tag'] || 'tproxy'}${i}`
     } else {
       var temp = Inbound(item)
       temp['tag'] += i.toString()
-      // temp['sniff'] = true
-      // temp['domain_strategy'] = domain_strategy
-      // if (['hysteria2', 'trojan', 'vmess'].includes(p)) {
-      //   temp['managed'] = true
-      // }
       res['inbounds'].push(temp)
       item['core_tag'] = temp['tag']
     }

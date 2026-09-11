@@ -16,7 +16,11 @@ sidebar_position: 3
 
 ** 👉️ > 透明代理 **
 
-安装好后，直接启用 `Tun VPN` 入站就可以实现透明代理！推荐直接使用 docker 安装 UIF，否则你需要额外的操作：
+UIF 支持两种路线：`Tun VPN` 和 `WT Legacy TPROXY`。
+
+在 RMX5062 Android 15 + Droidspaces 环境中，推荐使用 `WT Legacy TPROXY`：WT/OpenWRT 继续负责 legacy iptables TPROXY、策略路由和 Cloudflare 端口直连，UIF 只监听 sing-box 的 `tproxy` 入站（默认 `0.0.0.0:7895`）。此模式不依赖 nftables，不创建 TUN，不设置 `auto_route` 或 `auto_redirect`，也不会修改 Android 宿主或 WT 防火墙规则。详细步骤见 [WT Legacy TPROXY](../inbound/wt-tproxy.md)。
+
+如果使用 Tun VPN，仍需额外操作：
 
 ① 检查是否开启了 `路由转发` 并设置好防火墙允许流量进入，通常在 OpenWrt 上已经默认设置好了:
 
@@ -27,4 +31,4 @@ ufw disable # 关闭防火墙，你也可以选择创建指定防火墙规则，
 
 ② 还需要确保已安装了 `kmod-tun` 和 `iptable` 依赖，否则内核将无法创建虚拟网卡。
 
-如果想局域网内的设备连上就可以翻墙，建议使用旁路由的方案，连上软路由的设备只需手动修改 IP 和 DNS 即可；参考 [透明代理视频教程](../inbound/tun.md)。
+Tun VPN 不应与 WT 的全量 legacy TPROXY 同时启用。如果想让局域网设备使用 WT 网关，优先采用 WT Legacy TPROXY；UIF 的普通端口放行不是 TPROXY 规则。

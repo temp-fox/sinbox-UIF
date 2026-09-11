@@ -143,6 +143,21 @@ export function newDefaultTunIn(mode) {
   return res;
 }
 
+export function newDefaultTproxyIn() {
+  var res = DeepCopy(proxy);
+  res.tag = "WT Legacy TPROXY";
+  res.enabled = false;
+  res.protocol = "tproxy";
+  res.id = uuidv4();
+  res.transport.address = "0.0.0.0";
+  res.transport.port = 7895;
+  res.transport.protocol = "tcp";
+  res.transport.tls_type = "none";
+  res.transport.tls = {};
+  res.setting = {};
+  return res;
+}
+
 function newDefaultRoute() {
   var res = DeepCopy(route);
   return res;
@@ -247,6 +262,7 @@ export {
   newSub,
   newDefaultRoute,
   newFreedomOut,
+  newDefaultTproxyIn,
   FindInByID,
   FindOutByID,
 };
