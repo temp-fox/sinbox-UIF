@@ -1435,8 +1435,23 @@ function TestNode(uifStyleNodeConfig) {
       var item = uifStyleNodeConfig[i];
       if (data["status"] == 0 && data["delay"] != 0) {
         item.delay = data["delay"].toString();
+        item.last_probe_delay_ms = Number(data["delay"]);
+        item.last_probe_status = "healthy";
+        item.last_probe_delay_ms = Number(data["delay"]);
+        item.consecutive_failures = 0;
+        item.quarantined = false;
       } else {
         item.delay = "-1";
+        item.last_probe_delay_ms = -1;
+        item.last_probe_status = "failed";
+        item.consecutive_failures = Number(item.consecutive_failures || 0) + 1;
+        const policy = state.subscribe.info.probe || {};
+        if (item.consecutive_failures >= Number(policy.max_consecutive_failures || 3)) {
+          item.quarantined = true;
+        }
+        if (policy.failure_action === "delete" && item.quarantined) {
+          item.enabled = false;
+        }
       }
     },
     function (error) {
