@@ -1204,6 +1204,24 @@ function UpdateSubExtraInfo() {
   }
 }
 
+async function RunSubscriptionJob(sub) {
+  const payload = await MyPost(state.apiAddress + "/subscriptions/job", {
+    subscription_id: sub.id,
+    kind: "refresh",
+    dst: sub.data,
+  });
+  const job = payload.data;
+  if (!job || !job.job_id) throw new Error("订阅任务创建失败");
+  for (let i = 0; i < 120; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const status = await MyPost(state.apiAddress + "/subscriptions/job/status", { job_id: job.job_id });
+    const current = status.data;
+    if (current.state === "success") return current.result || "";
+    if (["failed", "cancelled"].includes(current.state)) throw new Error(current.error || "订阅任务失败");
+  }
+  throw new Error("订阅任务超时");
+}
+
 async function UpdateSub2(info, isUpdatingExtraData) {
   if (!state.connection.isConnected) {
     if (isUpdatingExtraData) {
@@ -1232,14 +1250,9 @@ async function UpdateSub2(info, isUpdatingExtraData) {
   info.updateTime = moment().valueOf();
   if (info.type == "link") {
     try {
-      var dst = info.data;
-      dst = dst.replaceAll(" ", "");
-      dst = dst.replaceAll("\n", "");
-      dst = dst.replaceAll("\t", "");
-      var res = await MyPost(state.apiAddress + "/http_mutiple", {
-        dst: dst,
-      });
-      console.log(res);
+      let res = { data: { status: 0, res: rawData }, headers: {} };
+      rawData = await RunSubscriptionJob(info);
+      res.data.res = rawData;
     } catch (error) {
       console.log(error);
       Message.error({
