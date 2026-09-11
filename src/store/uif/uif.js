@@ -1434,12 +1434,22 @@ function TestNode(uifStyleNodeConfig) {
       var i = parseInt(data["tag"]);
       var item = uifStyleNodeConfig[i];
       if (data["status"] == 0 && data["delay"] != 0) {
-        item.delay = data["delay"].toString();
-        item.last_probe_delay_ms = Number(data["delay"]);
-        item.last_probe_status = "healthy";
-        item.last_probe_delay_ms = Number(data["delay"]);
-        item.consecutive_failures = 0;
-        item.quarantined = false;
+        const policy = state.subscribe.info.probe || {};
+        const threshold = Number(policy.threshold_ms || 0);
+        if (threshold > 0 && Number(data["delay"]) > threshold) {
+          item.delay = data["delay"].toString();
+          item.last_probe_delay_ms = Number(data["delay"]);
+          item.last_probe_status = "slow";
+          item.consecutive_failures = Number(item.consecutive_failures || 0) + 1;
+          item.quarantined = item.consecutive_failures >= Number(policy.max_consecutive_failures || 3);
+          if (policy.failure_action === "delete" && item.quarantined) item.enabled = false;
+        } else {
+          item.delay = data["delay"].toString();
+          item.last_probe_delay_ms = Number(data["delay"]);
+          item.last_probe_status = "healthy";
+          item.consecutive_failures = 0;
+          item.quarantined = false;
+        }
       } else {
         item.delay = "-1";
         item.last_probe_delay_ms = -1;
