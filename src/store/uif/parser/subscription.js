@@ -69,6 +69,26 @@ export const mergeSubscriptionNodes = (oldNodes = [], newNodes = [], mode = 'mer
   return merged
 }
 
+export const applyProbeResult = (nodes, index, result, policy = {}) => {
+  const node = nodes[index]
+  if (!node) return null
+  const delay = Number(result && result.delay)
+  const success = result && result.success !== false && Number.isFinite(delay) && delay > 0
+  const threshold = Number(policy.threshold_ms || 0)
+  const healthy = success && (!threshold || delay <= threshold)
+  node.last_probe_delay_ms = success ? delay : -1
+  node.delay = success ? String(delay) : '-1'
+  node.last_probe_status = healthy ? 'healthy' : (success ? 'slow' : 'failed')
+  node.consecutive_failures = healthy ? 0 : Number(node.consecutive_failures || 0) + 1
+  if (healthy) node.quarantined = false
+  if (node.consecutive_failures >= Number(policy.max_consecutive_failures || 3)) node.quarantined = true
+  if (policy.failure_action === 'delete' && node.quarantined) {
+    const keep = Math.max(1, Number(policy.min_keep || 1))
+    const available = nodes.filter((candidate) => candidate.enabled && !candidate.quarantined && candidate !== node).length
+    if (available >= keep) node.enabled = false
+  }
+  return node
+}
 export const subscriptionDefaults = {
   schema_version: 2,
   policy: {

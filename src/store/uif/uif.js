@@ -27,7 +27,7 @@ import {
   buildInboundPorts,
   validateEnabledInbounds,
 } from "./parser/inbound_validation";
-import { mergeSubscriptionNodes } from "./parser/subscription";
+import { mergeSubscriptionNodes, applyProbeResult } from "./parser/subscription";
 
 var subscriptionTimer = null;
 var subscriptionJobs = {};
@@ -1434,38 +1434,9 @@ function TestNode(uifStyleNodeConfig) {
       var i = parseInt(data["tag"]);
       var item = uifStyleNodeConfig[i];
       if (data["status"] == 0 && data["delay"] != 0) {
-        const policy = state.subscribe.info.probe || {};
-        const threshold = Number(policy.threshold_ms || 0);
-        if (threshold > 0 && Number(data["delay"]) > threshold) {
-          item.delay = data["delay"].toString();
-          item.last_probe_delay_ms = Number(data["delay"]);
-          item.last_probe_status = "slow";
-          item.consecutive_failures = Number(item.consecutive_failures || 0) + 1;
-          item.quarantined = item.consecutive_failures >= Number(policy.max_consecutive_failures || 3);
-          if (policy.failure_action === "delete" && item.quarantined) {
-          const enabledNodes = uifStyleNodeConfig.filter((node) => node.enabled && !node.quarantined).length;
-          const minKeep = Math.max(1, Number(policy.min_keep || 1));
-          if (enabledNodes > minKeep) item.enabled = false;
-        }
-        } else {
-          item.delay = data["delay"].toString();
-          item.last_probe_delay_ms = Number(data["delay"]);
-          item.last_probe_status = "healthy";
-          item.consecutive_failures = 0;
-          item.quarantined = false;
-        }
+        applyProbeResult(uifStyleNodeConfig, i, { success: true, delay: data["delay"] }, state.subscribe.info.probe || {});
       } else {
-        item.delay = "-1";
-        item.last_probe_delay_ms = -1;
-        item.last_probe_status = "failed";
-        item.consecutive_failures = Number(item.consecutive_failures || 0) + 1;
-        const policy = state.subscribe.info.probe || {};
-        if (item.consecutive_failures >= Number(policy.max_consecutive_failures || 3)) {
-          item.quarantined = true;
-        }
-        if (policy.failure_action === "delete" && item.quarantined) {
-          item.enabled = false;
-        }
+        applyProbeResult(uifStyleNodeConfig, i, { success: false, delay: -1 }, state.subscribe.info.probe || {});
       }
     },
     function (error) {

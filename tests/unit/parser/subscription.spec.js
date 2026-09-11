@@ -1,4 +1,4 @@
-import { nodeFingerprint, mergeSubscriptionNodes, subscriptionDefaults } from '@/store/uif/parser/subscription'
+import { nodeFingerprint, mergeSubscriptionNodes, subscriptionDefaults, applyProbeResult } from '@/store/uif/parser/subscription'
 
 describe('subscription state management', () => {
   const node = (address) => ({
@@ -27,6 +27,19 @@ describe('subscription state management', () => {
     const next = mergeSubscriptionNodes([node('old.example')], [node('new.example')], 'replace')
     expect(next).toHaveLength(1)
     expect(next[0].transport.address).toBe('new.example')
+  })
+
+  it('applies threshold and protects minimum keep count', () => {
+    const nodes = [
+      { enabled: true, quarantined: false, consecutive_failures: 0 },
+      { enabled: true, quarantined: false, consecutive_failures: 0 },
+    ]
+    applyProbeResult(nodes, 0, { success: true, delay: 500 }, {
+      threshold_ms: 200, max_consecutive_failures: 1, failure_action: 'delete', min_keep: 1,
+    })
+    expect(nodes[0].quarantined).toBe(true)
+    expect(nodes[0].enabled).toBe(false)
+    expect(nodes[1].enabled).toBe(true)
   })
 
   it('ships safe defaults for old subscriptions', () => {
