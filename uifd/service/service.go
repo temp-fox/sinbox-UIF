@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,10 +15,12 @@ import (
 
 	"github.com/getlantern/elevate"
 	"github.com/gorilla/websocket"
+	"github.com/uif/uifd/subscription"
 	"github.com/uif/uifd/uif"
 )
 
 var serviceMutext sync.Mutex
+var subscriptionJobs = subscription.NewManager()
 
 var APIServer http.Server
 var WebServer http.Server
@@ -194,7 +197,23 @@ func Service(w http.ResponseWriter, r *http.Request) {
 		res = uif.Update()
 	} else if path == "/check_update" {
 		res = uif.CheckUpdateReq()
-	} else if path == "/get_warp" {
+	} else if path == "/subscriptions/job" {
+		id := r.FormValue("subscription_id")
+		kind := r.FormValue("kind")
+		job := subscriptionJobs.Start(r.Context(), id, kind, func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		payload, _ := json.Marshal(job)
+		res = string(payload)
+	} else if path == "/subscriptions/job/status" {
+		job := subscriptionJobs.Get(r.FormValue("job_id"))
+		if job == nil {
+			res = `{"status":-1,"error":"job not found"}`
+		} else {
+			payload, _ := json.Marshal(job)
+			res = string(payload)
+		}
 		serviceMutext.Unlock()
 		fmt.Fprint(w, uif.BuildWgcfRes())
 		return
