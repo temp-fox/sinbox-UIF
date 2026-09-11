@@ -37,8 +37,9 @@ describe('parser:parse to singBoxStyle config', () => {
     expect(JSON.stringify(config.inbounds)).not.toContain('auto_route')
     expect(JSON.stringify(config.inbounds)).not.toContain('auto_redirect')
     expect(JSON.stringify(config.inbounds)).not.toContain('interface_name')
-  })
+  });
 
+  it('trojan tcp no tls inbound', () => {
     var rawData = {
       protocol: "trojan",
       tag: "1",

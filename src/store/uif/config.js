@@ -262,7 +262,6 @@ export {
   newSub,
   newDefaultRoute,
   newFreedomOut,
-  newDefaultTproxyIn,
   FindInByID,
   FindOutByID,
 };
