@@ -128,6 +128,20 @@ func TestManagerCleanup(t *testing.T) {
 	}
 }
 
+func TestManagerResultPersistsPayloadAndBytes(t *testing.T) {
+	m := NewManager(WithRetention(time.Hour))
+	job := m.StartResult(context.Background(), "sub-result", "refresh", func(context.Context) (string, error) {
+		return "节点配置", nil
+	})
+	result := waitForState(t, m, job.ID, Success)
+	if result.Result != "节点配置" {
+		t.Fatalf("result = %q, want %q", result.Result, "节点配置")
+	}
+	if result.ResultBytes != len([]byte(result.Result)) {
+		t.Fatalf("result_bytes = %d, want %d", result.ResultBytes, len([]byte(result.Result)))
+	}
+}
+
 func TestManagerClose(t *testing.T) {
 	m := NewManager()
 	started := make(chan struct{})

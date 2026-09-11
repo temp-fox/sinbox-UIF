@@ -27,6 +27,7 @@ type Job struct {
 	FinishedAt     time.Time `json:"finished_at,omitempty"`
 	Error          string    `json:"error,omitempty"`
 	Result         string    `json:"result,omitempty"`
+	ResultBytes    int       `json:"result_bytes,omitempty"`
 }
 
 // JobFunc 是单个订阅任务的执行回调。回调应监听 ctx.Done，以便停止正在运行的任务。
@@ -97,25 +98,19 @@ func (m *Manager) SetCallback(fn JobFunc) {
 	m.mu.Unlock()
 }
 
-// StartResult runs a callback that can return a small result payload.
+// StartResult runs a callback that can return a result payload and byte count.
 func (m *Manager) StartResult(ctx context.Context, id, kind string, fn ResultFunc) *Job {
 	if fn == nil {
 		return m.Start(ctx, id, kind, nil)
 	}
-	return m.Start(ctx, id, kind, func(runCtx context.Context) error {
-		result, err := fn(runCtx)
-		m.mu.Lock()
-		if jobID := m.active[id]; jobID != "" {
-			if job := m.jobs[jobID]; job != nil {
-				job.Result = result
-			}
-		}
-		m.mu.Unlock()
-		return err
-	})
+	return m.start(ctx, id, kind, nil, fn)
 }
 
 func (m *Manager) Start(ctx context.Context, id, kind string, fn JobFunc) *Job {
+	return m.start(ctx, id, kind, fn, nil)
+}
+
+func (m *Manager) start(ctx context.Context, id, kind string, fn JobFunc, resultFn ResultFunc) *Job {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -136,11 +131,13 @@ func (m *Manager) Start(ctx context.Context, id, kind string, fn JobFunc) *Job {
 		m.jobs[job.ID] = job
 		return copyJob(job)
 	}
-	if fn == nil {
-		fn = m.callback
-	}
-	if fn == nil {
-		fn = func(context.Context) error { return nil }
+	if resultFn == nil {
+		if fn == nil {
+			fn = m.callback
+		}
+		if fn == nil {
+			fn = func(context.Context) error { return nil }
+		}
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
 	job := &Job{ID: m.nextIDLocked(), Type: kind, SubscriptionID: id, State: Queued}
@@ -149,7 +146,7 @@ func (m *Manager) Start(ctx context.Context, id, kind string, fn JobFunc) *Job {
 	if id != "" {
 		m.active[id] = job.ID
 	}
-	go m.run(job.ID, jobCtx, cancel, fn)
+	go m.run(job.ID, jobCtx, cancel, fn, resultFn)
 	return copyJob(job)
 }
 
@@ -158,7 +155,7 @@ func (m *Manager) nextIDLocked() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), sequence)
 }
 
-func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFunc, fn JobFunc) {
+func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFunc, fn JobFunc, resultFn ResultFunc) {
 	defer cancel()
 	select {
 	case m.slots <- struct{}{}:
@@ -179,14 +176,27 @@ func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFu
 	m.mu.Unlock()
 
 	var err error
+	var result string
 	func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err = fmt.Errorf("subscription job panic: %v", recovered)
 			}
 		}()
-		err = fn(ctx)
+		if resultFn != nil {
+			result, err = resultFn(ctx)
+		} else {
+			err = fn(ctx)
+		}
 	}()
+	if resultFn != nil {
+		m.mu.Lock()
+		if job := m.jobs[jobID]; job != nil {
+			job.Result = result
+			job.ResultBytes = len([]byte(result))
+		}
+		m.mu.Unlock()
+	}
 	if ctx.Err() != nil {
 		m.finish(jobID, Cancelled, ctx.Err())
 	} else if err != nil {

@@ -124,6 +124,13 @@ func TryOpenPort(i string) {
 	}
 }
 
+func validateSubscriptionResult(result string) (string, error) {
+	if strings.TrimSpace(result) == "" {
+		return "", fmt.Errorf("subscription response body is empty")
+	}
+	return result, nil
+}
+
 func Service(w http.ResponseWriter, r *http.Request) {
 	// {{{
 	serviceMutext.Lock()
@@ -206,6 +213,10 @@ func Service(w http.ResponseWriter, r *http.Request) {
 				return "", fmt.Errorf("subscription URL is empty")
 			}
 			result, _, err := uif.HTTPGetDirect(dst)
+			if err != nil {
+				return "", err
+			}
+			result, err = validateSubscriptionResult(result)
 			if err != nil {
 				return "", err
 			}
