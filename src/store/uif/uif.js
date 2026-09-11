@@ -418,22 +418,32 @@ function StartSubscriptionScheduler() {
   subscriptionTimer = setInterval(() => {
     if (!state.connection.isConnected) return;
     const now = Date.now();
-    for (const sub of configObj.state.config.subscribe || []) {
+    for (const [index, sub] of (configObj.state.config.subscribe || []).entries()) {
       const policy = sub.policy || {};
+      const subID = sub.id || `legacy-${sub.tag || 'subscription'}-${index}`;
+      if (!sub.id) sub.id = subID;
       const interval = Number(policy.update_interval_sec || 0);
-      if (!policy.update_enabled || interval <= 0 || subscriptionJobs[sub.id]) continue;
+      if (!policy.update_enabled || interval <= 0 || subscriptionJobs[subID]) continue;
       if (now - Number(sub.last_update_at || sub.updateTime || 0) < interval * 1000) continue;
-      subscriptionJobs[sub.id] = true;
+      subscriptionJobs[subID] = true;
       const previous = state.subscribe.info;
       state.subscribe.info = sub;
-      UpdateSub2(sub, false).finally(() => {
-        sub.last_update_at = Date.now();
-        subscriptionJobs[sub.id] = false;
-        state.subscribe.info = previous;
+      UpdateSub2(sub, false).then((success) => {
+        sub.last_update_status = success ? "success" : "failed";
+        sub.last_update_error = success ? "" : "subscription update failed";
+        if (success) sub.last_update_at = Date.now();
         SaveUIFConfig();
-        ApplyCoreConfig();
+        if (success) ApplyCoreConfig();
+      }).catch((error) => {
+        sub.last_update_status = "failed";
+        sub.last_update_error = error.message || String(error);
+        SaveUIFConfig();
+      }).finally(() => {
+        subscriptionJobs[subID] = false;
+        state.subscribe.info = previous;
       });
     }
+
   }, 3000);
 }
 
@@ -1216,6 +1226,7 @@ async function RunSubscriptionJob(sub) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     const status = await MyPost(state.apiAddress + "/subscriptions/job/status", { job_id: job.job_id });
     const current = status.data;
+    if (current.status === -1) throw new Error(current.error || "订阅任务不存在");
     if (current.state === "success") return current.result || "";
     if (["failed", "cancelled"].includes(current.state)) throw new Error(current.error || "订阅任务失败");
   }
@@ -1247,7 +1258,7 @@ async function UpdateSub2(info, isUpdatingExtraData) {
   }
 
   var rawData = info.data;
-  info.updateTime = moment().valueOf();
+  const previousUpdateTime = info.updateTime;
   if (info.type == "link") {
     try {
       let res = { data: { status: 0, res: rawData }, headers: {} };
@@ -1258,13 +1269,16 @@ async function UpdateSub2(info, isUpdatingExtraData) {
       Message.error({
         message: "请求出错！" + error,
       });
+      info.updateTime = previousUpdateTime;
+      info.last_update_status = "failed";
+      info.last_update_error = error.message || String(error);
       return false;
     }
     if (res.data["status"] != 0) {
-      console.log(res);
-      Message.error({
-        message: res.data["res"],
-      });
+      info.updateTime = previousUpdateTime;
+      info.last_update_status = "failed";
+      info.last_update_error = res.data["res"] || "subscription request failed";
+      Message.error({ message: info.last_update_error });
       return false;
     }
     console.log(res.data);
@@ -1287,6 +1301,9 @@ async function UpdateSub2(info, isUpdatingExtraData) {
 
   var outList = TryParse(rawData);
   if (outList.length == 0) {
+    info.updateTime = previousUpdateTime;
+    info.last_update_status = "failed";
+    info.last_update_error = "subscription parser returned no nodes";
     Message.error({
       message: Translator({
         cn: "导入数据解析出错！可能不支持该订阅格式",
@@ -1309,6 +1326,9 @@ async function UpdateSub2(info, isUpdatingExtraData) {
     outList,
     info.policy && info.policy.update_mode === "replace" ? "replace" : "merge",
   );
+  info.updateTime = moment().valueOf();
+  info.last_update_status = "success";
+  info.last_update_error = "";
   return true;
 }
 
