@@ -28,17 +28,19 @@ const DefaultProbeURL = "https://www.gstatic.com/generate_204"
 // Targets are normally generated from the refreshed snapshot; explicit targets
 // are useful for tests and callers that need a custom endpoint.
 type ProbeConfig struct {
-	Enabled                bool          `json:"enabled,omitempty"`
-	DefaultURL             string        `json:"default_url,omitempty"`
-	TimeoutMs              int           `json:"timeout_ms,omitempty"`
-	Concurrency            int           `json:"concurrency,omitempty"`
-	ThresholdMs            int           `json:"threshold_ms,omitempty"`
-	MaxConsecutiveFailures int           `json:"max_consecutive_failures,omitempty"`
-	FailureAction          string        `json:"failure_action,omitempty"`
-	MinKeep                int           `json:"min_keep,omitempty"`
-	Options                ProbeOptions  `json:"options,omitempty"`
-	Targets                []ProbeTarget `json:"targets,omitempty"`
-	Executor               ProbeExecutor `json:"-"`
+	Enabled                bool                 `json:"enabled,omitempty"`
+	DefaultURL             string               `json:"default_url,omitempty"`
+	TimeoutMs              int                  `json:"timeout_ms,omitempty"`
+	Concurrency            int                  `json:"concurrency,omitempty"`
+	ThresholdMs            int                  `json:"threshold_ms,omitempty"`
+	MaxConsecutiveFailures int                  `json:"max_consecutive_failures,omitempty"`
+	FailureAction          string               `json:"failure_action,omitempty"`
+	MinKeep                int                  `json:"min_keep,omitempty"`
+	Options                ProbeOptions         `json:"options,omitempty"`
+	Targets                []ProbeTarget        `json:"targets,omitempty"`
+	TargetResolver         *ProbeTargetResolver `json:"-"`
+	SubscriptionID         string               `json:"-"`
+	Executor               ProbeExecutor        `json:"-"`
 }
 
 func (c ProbeConfig) options() ProbeOptions {
@@ -71,11 +73,19 @@ func (c ProbeConfig) targets(snapshot Snapshot) []ProbeTarget {
 	if len(c.Targets) > 0 {
 		return append([]ProbeTarget(nil), c.Targets...)
 	}
-	url := c.DefaultURL
-	if url == "" {
-		url = DefaultProbeURL
+	probeURL := c.DefaultURL
+	if probeURL == "" {
+		probeURL = DefaultProbeURL
 	}
-	return TargetsForSnapshotWithURL(snapshot, url)
+	if c.TargetResolver != nil {
+		resolver := *c.TargetResolver
+		resolver.DefaultURL = probeURL
+		targets := resolver.ResolveTargets(snapshot, c.SubscriptionID)
+		if len(targets) > 0 {
+			return targets
+		}
+	}
+	return TargetsForSnapshotWithURL(snapshot, probeURL)
 }
 
 // ProbeExecutor performs one node probe. Implementations must honor ctx

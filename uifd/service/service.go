@@ -318,6 +318,20 @@ func refreshSubscription(ctx context.Context, spec subscription.SubscriptionSpec
 	return err
 }
 
+func legacyProbeRoutes(raw interface{}) []map[string]interface{} {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	routes := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		if route, ok := item.(map[string]interface{}); ok {
+			routes = append(routes, route)
+		}
+	}
+	return routes
+}
+
 func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 	config, err := uif.ReadUIFConfigJson()
 	if err != nil {
@@ -344,6 +358,8 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, fmt.Errorf("parse subscription config: %w", err)
 	}
+	legacyRoutes := legacyProbeRoutes(config["routes"])
+	resolver := subscription.ProbeTargetResolver{Routes: legacyRoutes}
 	specs := make([]subscription.SubscriptionSpec, 0, len(items))
 	for index, item := range items {
 		id := strings.TrimSpace(item.ID)
@@ -361,7 +377,13 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 		if err != nil {
 			return nil, err
 		}
-		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy, Probe: item.Probe, ProbeTargets: item.ProbeTargets})
+		probe := item.Probe
+		if probe.DefaultURL == "" {
+			probe.DefaultURL = subscription.DefaultProbeURL
+		}
+		probe.SubscriptionID = id
+		probe.TargetResolver = &resolver
+		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy, Probe: probe, ProbeTargets: item.ProbeTargets})
 	}
 	return specs, nil
 }
