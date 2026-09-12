@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -86,6 +89,64 @@ type ProbeExecutorFunc func(context.Context, ProbeTarget) (ProbeResult, error)
 
 func (f ProbeExecutorFunc) Probe(ctx context.Context, target ProbeTarget) (ProbeResult, error) {
 	return f(ctx, target)
+}
+
+// UnsupportedProbeExecutor is the safe service default. A URL-level HTTP
+// request cannot prove that a particular subscription node works, so the
+// scheduler must not mark every node healthy without an injected executor.
+type UnsupportedProbeExecutor struct{}
+
+func (UnsupportedProbeExecutor) Probe(context.Context, ProbeTarget) (ProbeResult, error) {
+	return ProbeResult{Success: false, Error: "unsupported: per-node proxy probing requires an injected ProbeExecutor"}, errors.New("unsupported: per-node proxy probing requires an injected ProbeExecutor")
+}
+
+// HTTPURLProbeExecutor performs only an endpoint-level HTTP probe. It is
+// intentionally not used as the service default because a successful request
+// does not establish per-node proxy health. Callers may inject it only when
+// their integration treats the target URL as the health subject.
+type HTTPURLProbeExecutor struct {
+	Client *http.Client
+	URL    string
+}
+
+func NewHTTPURLProbeExecutor(client *http.Client, endpoint string) *HTTPURLProbeExecutor {
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	return &HTTPURLProbeExecutor{Client: client, URL: endpoint}
+}
+
+func (p *HTTPURLProbeExecutor) Probe(ctx context.Context, target ProbeTarget) (ProbeResult, error) {
+	if p == nil || p.Client == nil {
+		return ProbeResult{Error: "unsupported: HTTP URL probe is not configured"}, errors.New("unsupported: HTTP URL probe is not configured")
+	}
+	endpoint := strings.TrimSpace(p.URL)
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(target.URL)
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return ProbeResult{Error: "unsupported: probe endpoint must be an http(s) URL without credentials"}, errors.New("unsupported: invalid HTTP probe endpoint")
+	}
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.String(), nil)
+	if err != nil {
+		return ProbeResult{Error: "unsupported: invalid HTTP probe endpoint"}, err
+	}
+	resp, err := p.Client.Do(req)
+	if err != nil {
+		return ProbeResult{Error: "HTTP URL probe failed: " + err.Error()}, err
+	}
+	resp.Body.Close()
+	delay := int(time.Since(start) / time.Millisecond)
+	if delay < 1 {
+		delay = 1
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		err := fmt.Errorf("HTTP URL probe returned %s", resp.Status)
+		return ProbeResult{DelayMs: delay, Error: err.Error()}, err
+	}
+	return ProbeResult{Success: true, DelayMs: delay}, nil
 }
 
 // ProbeOptions controls the worker pool and the safety policy used when

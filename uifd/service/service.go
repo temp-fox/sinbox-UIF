@@ -23,7 +23,10 @@ import (
 
 var serviceMutext sync.Mutex
 var subscriptionJobs = subscription.NewManager()
-var subscriptionProbeExecutor subscription.ProbeExecutor
+
+// The default deliberately refuses to claim per-node health. An HTTP URL
+// probe can be injected explicitly, but it cannot prove a node's proxy path.
+var subscriptionProbeExecutor subscription.ProbeExecutor = subscription.UnsupportedProbeExecutor{}
 var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobManager(subscriptionJobs))
 
 // SetSubscriptionProbeExecutor injects the node probe implementation used by
@@ -357,6 +360,61 @@ func parseSubscriptionResult(result, extraInfo string) (string, error) {
 	return string(envelope), nil
 }
 
+func subscriptionTaskAPI(w http.ResponseWriter, r *http.Request) bool {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	writeJSON := func(status int, value interface{}) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(value)
+	}
+	if path == "/subscriptions/tasks" {
+		if r.Method != http.MethodGet {
+			writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return true
+		}
+		writeJSON(http.StatusOK, subscriptionScheduler.Tasks())
+		return true
+	}
+	if path == "/subscriptions/task" {
+		if r.Method != http.MethodGet {
+			writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return true
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeJSON(http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return true
+		}
+		task := subscriptionScheduler.GetTask(id)
+		if task == nil {
+			writeJSON(http.StatusNotFound, map[string]string{"error": "task not found"})
+			return true
+		}
+		writeJSON(http.StatusOK, map[string]interface{}{"task": task, "job": subscriptionScheduler.Job(id)})
+		return true
+	}
+	const cancelPrefix = "/subscriptions/task/"
+	if strings.HasPrefix(path, cancelPrefix) && strings.HasSuffix(path, "/cancel") {
+		if r.Method != http.MethodPost {
+			writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return true
+		}
+		encodedID := strings.TrimSuffix(strings.TrimPrefix(path, cancelPrefix), "/cancel")
+		id, err := url.PathUnescape(encodedID)
+		if err != nil || strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
+			writeJSON(http.StatusBadRequest, map[string]string{"error": "invalid task id"})
+			return true
+		}
+		if subscriptionScheduler.GetTask(id) == nil {
+			writeJSON(http.StatusNotFound, map[string]string{"error": "task not found"})
+			return true
+		}
+		cancelled := subscriptionScheduler.Cancel(id)
+		writeJSON(http.StatusOK, map[string]interface{}{"cancelled": cancelled, "task": subscriptionScheduler.GetTask(id)})
+		return true
+	}
+	return false
+}
+
 func Service(w http.ResponseWriter, r *http.Request) {
 	// {{{
 	serviceMutext.Lock()
@@ -365,6 +423,11 @@ func Service(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	if subscriptionTaskAPI(w, r) {
+		serviceMutext.Unlock()
+		return
+	}
 
 	path := r.URL.Path
 	res := "{}"
