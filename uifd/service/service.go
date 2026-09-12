@@ -27,6 +27,7 @@ var subscriptionJobs = subscription.NewManager()
 // The default deliberately refuses to claim per-node health. An HTTP URL
 // probe can be injected explicitly, but it cannot prove a node's proxy path.
 var subscriptionProbeExecutor subscription.ProbeExecutor = subscription.UnsupportedProbeExecutor{}
+var subscriptionProbeExecutorConfigured bool
 var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobManager(subscriptionJobs))
 
 // SetSubscriptionProbeExecutor injects the node probe implementation used by
@@ -34,6 +35,7 @@ var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobM
 // and embedding callers can provide any ProbeExecutor.
 func SetSubscriptionProbeExecutor(executor subscription.ProbeExecutor) {
 	subscriptionProbeExecutor = executor
+	subscriptionProbeExecutorConfigured = executor != nil
 }
 
 var APIServer http.Server
@@ -302,7 +304,17 @@ func refreshSubscriptionResult(ctx context.Context, spec subscription.Subscripti
 		spec.SnapshotPath = path
 	}
 	if spec.Probe.Enabled && spec.Probe.Executor == nil {
-		spec.Probe.Executor = subscriptionProbeExecutor
+		if subscriptionProbeExecutorConfigured {
+			spec.Probe.Executor = subscriptionProbeExecutor
+		} else {
+			// Use the packaged/configured sing-box core by default. The executor
+			// validates the path and returns a clear failure when unavailable.
+			corePath := spec.Probe.CorePath
+			if strings.TrimSpace(corePath) == "" {
+				corePath = uif.GetCorePath()
+			}
+			spec.Probe.Executor = subscription.NewSingBoxProbeExecutor(corePath)
+		}
 	}
 	result, err := subscription.Refresh(ctx, spec, func(fetchCtx context.Context, source string) (string, string, error) {
 		return subscriptionSource(fetchCtx, source, "")

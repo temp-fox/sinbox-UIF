@@ -41,6 +41,7 @@ type ProbeConfig struct {
 	TargetResolver         *ProbeTargetResolver `json:"-"`
 	SubscriptionID         string               `json:"-"`
 	Executor               ProbeExecutor        `json:"-"`
+	CorePath               string               `json:"core_path,omitempty"`
 }
 
 func (c ProbeConfig) options() ProbeOptions {
