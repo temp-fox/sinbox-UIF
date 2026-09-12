@@ -23,6 +23,7 @@ import (
 
 var serviceMutext sync.Mutex
 var subscriptionJobs = subscription.NewManager()
+var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobManager(subscriptionJobs))
 
 var APIServer http.Server
 var WebServer http.Server
@@ -126,6 +127,28 @@ func TryOpenPort(i string) {
 	}
 }
 
+func loadSubscriptionSpec(id, dst string) (subscription.SubscriptionSpec, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(dst) == "" {
+		return subscription.SubscriptionSpec{}, fmt.Errorf("subscription id and url are required")
+	}
+	root := uif.GetWorkSpace()
+	if root == "" {
+		return subscription.SubscriptionSpec{}, fmt.Errorf("uif workspace is empty")
+	}
+	safe := strings.NewReplacer("/", "_", "\\", "_", "..", "_").Replace(id)
+	return subscription.SubscriptionSpec{ID: id, URL: dst, SnapshotPath: filepath.Join(root, "subscriptions", safe+".snapshot.json"), Policy: subscription.SchedulePolicy{UpdateMode: "merge", MissingGraceRuns: 3, MinKeep: 2}}, nil
+}
+
+func refreshSubscriptionOnce(ctx context.Context, spec subscription.SubscriptionSpec) (string, error) {
+	result, err := subscription.Refresh(ctx, spec, func(fetchCtx context.Context, source string) (string, string, error) {
+		return uif.HTTPGetDirectContext(fetchCtx, source)
+	})
+	if err != nil {
+		return "", err
+	}
+	return subscription.MarshalResult(result), nil
+}
+
 func validateSubscriptionResult(result string) (string, error) {
 	if strings.TrimSpace(result) == "" {
 		return "", fmt.Errorf("subscription response body is empty")
@@ -214,6 +237,92 @@ func parseAndSaveSubscriptionSnapshot(result, extraInfo, snapshotPath string) (s
 		"snapshot_summary": summary,
 	})
 	return string(envelope), nil
+}
+
+// refreshSubscription executes one complete fetch/parse/merge/publish cycle.
+// It is shared by the legacy /subscriptions/job endpoint and the scheduler so
+// both paths have identical failure and snapshot safety semantics.
+func refreshSubscriptionResult(ctx context.Context, spec subscription.SubscriptionSpec) (string, error) {
+	if strings.TrimSpace(spec.SnapshotPath) == "" {
+		path, err := subscriptionSnapshotPath("", spec.ID)
+		if err != nil {
+			return "", err
+		}
+		spec.SnapshotPath = path
+	}
+	result, err := subscription.Refresh(ctx, spec, func(fetchCtx context.Context, source string) (string, string, error) {
+		return subscriptionSource(fetchCtx, source, "")
+	})
+	if err != nil {
+		return "", err
+	}
+	return subscription.MarshalResult(result), nil
+}
+
+func refreshSubscription(ctx context.Context, spec subscription.SubscriptionSpec) error {
+	_, err := refreshSubscriptionResult(ctx, spec)
+	return err
+}
+
+func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
+	config, err := uif.ReadUIFConfigJson()
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := config["subscribe"]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var items []struct {
+		ID           string                      `json:"id"`
+		URL          string                      `json:"url"`
+		Source       string                      `json:"source"`
+		Data         string                      `json:"data"`
+		SnapshotPath string                      `json:"snapshot_path"`
+		Policy       subscription.SchedulePolicy `json:"policy"`
+	}
+	if err := json.Unmarshal(data, &items); err != nil {
+		return nil, fmt.Errorf("parse subscription config: %w", err)
+	}
+	specs := make([]subscription.SubscriptionSpec, 0, len(items))
+	for index, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			id = fmt.Sprintf("legacy-subscription-%d", index)
+		}
+		source := item.URL
+		if source == "" {
+			source = item.Source
+		}
+		if source == "" {
+			source = item.Data
+		}
+		snapshotPath, err := subscriptionSnapshotPath(item.SnapshotPath, id)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy})
+	}
+	return specs, nil
+}
+
+func startSubscriptionScheduler() {
+	subscriptionScheduler = subscription.NewScheduler(refreshSubscription, subscription.WithJobManager(subscriptionJobs))
+	if specs, err := subscriptionSchedulerSpecs(); err == nil {
+		if err := subscriptionScheduler.Reload(specs); err == nil {
+			if err := subscriptionScheduler.Start(); err != nil {
+				uif.WriteLog("subscription scheduler start failed: " + err.Error())
+			}
+		} else {
+			uif.WriteLog("subscription scheduler config failed: " + err.Error())
+		}
+	} else {
+		uif.WriteLog("subscription scheduler load failed: " + err.Error())
+	}
 }
 
 func parseSubscriptionResult(result, extraInfo string) (string, error) {
@@ -321,11 +430,10 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			if pathErr != nil {
 				return "", pathErr
 			}
-			result, extraInfo, err := subscriptionSource(ctx, source, raw)
-			if err != nil {
-				return "", err
+			if raw != "" {
+				return parseAndSaveSubscriptionSnapshot(raw, "", snapshotPath)
 			}
-			return parseAndSaveSubscriptionSnapshot(result, extraInfo, snapshotPath)
+			return refreshSubscriptionResult(ctx, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath})
 		})
 		payload, _ := json.Marshal(job)
 		res = string(payload)
@@ -390,6 +498,7 @@ func RunServer() error {
 		Handler: api,
 	}
 	go APIServer.ListenAndServe()
+	startSubscriptionScheduler()
 	return nil
 }
 

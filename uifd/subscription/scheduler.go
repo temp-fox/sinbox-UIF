@@ -20,6 +20,16 @@ type SchedulePolicy struct {
 	StartupUpdate     bool          `json:"startup_update"`
 	StartupJitter     time.Duration `json:"-"`
 	StartupJitterSec  int64         `json:"startup_jitter_sec,omitempty"`
+
+	// The remaining fields control how a successful parse is merged into the
+	// persisted snapshot. They live here so the scheduler passes one complete
+	// subscription policy to its executor.
+	UpdateMode             string `json:"update_mode,omitempty"`
+	RemoveMissing          bool   `json:"remove_missing,omitempty"`
+	MissingGraceRuns       int    `json:"missing_grace_runs,omitempty"`
+	FailureAction          string `json:"failure_action,omitempty"`
+	MinKeep                int    `json:"min_keep,omitempty"`
+	MaxConsecutiveFailures int    `json:"max_consecutive_failures,omitempty"`
 }
 
 func (p SchedulePolicy) interval() time.Duration {
@@ -46,10 +56,14 @@ func (p SchedulePolicy) jitter() time.Duration {
 // is passed through unchanged so the executor can parse/fetch and publish it
 // according to the snapshot policy it received.
 type SubscriptionSpec struct {
-	ID       string         `json:"id"`
-	Source   string         `json:"source,omitempty"`
-	Snapshot Snapshot       `json:"snapshot"`
-	Policy   SchedulePolicy `json:"policy"`
+	ID string `json:"id"`
+	// URL is the preferred remote subscription endpoint. Source is retained as
+	// the legacy alias used by older callers and API payloads.
+	URL          string         `json:"url,omitempty"`
+	Source       string         `json:"source,omitempty"`
+	SnapshotPath string         `json:"snapshot_path,omitempty"`
+	Snapshot     Snapshot       `json:"snapshot"`
+	Policy       SchedulePolicy `json:"policy"`
 }
 
 // SchedulerExecutor performs one refresh. It must honor ctx cancellation.
@@ -209,6 +223,7 @@ func (s *Scheduler) Reload(specs []SubscriptionSpec) error {
 	for id, task := range s.tasks {
 		if _, exists := incoming[id]; !exists {
 			task.State = Cancelled
+			task.JobID = ""
 			task.NextRunAt = time.Time{}
 			task.Error = "subscription removed from schedule"
 		}
@@ -384,7 +399,7 @@ func (s *Scheduler) startJobLocked(id string, spec SubscriptionSpec, parent cont
 }
 
 func (s *Scheduler) observe(id, jobID string) {
-	ticker := time.NewTicker(5 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
 		job := s.manager.Get(jobID)
