@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"net"
 	"net/http"
 	"net/url"
@@ -355,6 +356,23 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 	return subscriptionSpecsFromConfig(config)
 }
 
+func stableLegacySubscriptionID(item map[string]interface{}, index int) string {
+	tag, _ := item["tag"].(string)
+	source, _ := item["data"].(string)
+	if source == "" {
+		source, _ = item["url"].(string)
+	}
+	if source == "" {
+		source, _ = item["source"].(string)
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tag + "\n" + source))
+	if tag == "" && source == "" {
+		_, _ = h.Write([]byte(fmt.Sprintf("\n%d", index)))
+	}
+	return fmt.Sprintf("legacy-subscription-%08x", h.Sum32())
+}
+
 func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.SubscriptionSpec, error) {
 	// 兼容调用方传入已经提取的节，但优先处理磁盘上的完整 UIF 文档。
 	section := config
@@ -368,6 +386,24 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 	raw, ok := section["subscribe"]
 	if !ok || raw == nil {
 		return nil, nil
+	}
+	if entries, ok := raw.([]interface{}); ok {
+		changed := false
+		for index, entry := range entries {
+			if item, ok := entry.(map[string]interface{}); ok && strings.TrimSpace(fmt.Sprint(item["id"])) == "" {
+				item["id"] = stableLegacySubscriptionID(item, index)
+				changed = true
+			}
+		}
+		if changed {
+			section["subscribe"] = entries
+			raw = entries
+			if _, complete := config["data"]; complete {
+				if encoded, marshalErr := json.Marshal(config); marshalErr == nil {
+					uif.SaveUIFConfig(string(encoded))
+				}
+			}
+		}
 	}
 	data, err := json.Marshal(raw)
 	if err != nil {
@@ -386,13 +422,13 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, fmt.Errorf("parse subscription config: %w", err)
 	}
-	legacyRoutes := legacyProbeRoutes(config["routes"])
+	legacyRoutes := legacyProbeRoutes(section["routes"])
 	resolver := subscription.ProbeTargetResolver{Routes: legacyRoutes}
 	specs := make([]subscription.SubscriptionSpec, 0, len(items))
 	for index, item := range items {
 		id := strings.TrimSpace(item.ID)
 		if id == "" {
-			id = fmt.Sprintf("legacy-subscription-%d", index)
+			id = stableLegacySubscriptionID(map[string]interface{}{"tag": "", "data": item.Data, "url": item.URL, "source": item.Source}, index)
 		}
 		source := item.URL
 		if source == "" {
@@ -686,7 +722,7 @@ func Service(w http.ResponseWriter, r *http.Request) {
 	} else if path == "/check_update" {
 		res = uif.CheckUpdateReq()
 	} else if path == "/subscriptions/job" {
-		id := r.FormValue("subscription_id")
+		id := strings.TrimSpace(r.FormValue("subscription_id"))
 		kind := r.FormValue("kind")
 		source := r.FormValue("source")
 		raw := r.FormValue("raw")
@@ -694,31 +730,38 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			source = r.FormValue("dst")
 		}
 		snapshotPath, pathErr := subscriptionSnapshotPath(r.FormValue("snapshot_path"), id)
-		job := subscriptionJobs.StartResult(nil, id, kind, func(ctx context.Context) (string, error) {
-			if pathErr != nil {
-				return "", pathErr
-			}
-			if raw != "" {
+		if pathErr != nil {
+			res = fmt.Sprintf(`{"status":-1,"error":%q}`, pathErr.Error())
+		} else if raw != "" {
+			job := subscriptionJobs.StartResult(nil, id, kind, func(ctx context.Context) (string, error) {
 				return parseAndSaveSubscriptionSnapshot(raw, "", snapshotPath)
-			}
-			spec, found, err := configuredSubscriptionSpec(id)
-			if err != nil {
-				return "", fmt.Errorf("load subscription policy and probe config: %w", err)
-			}
-			if !found {
-				spec = subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath}
+			})
+			payload, _ := json.Marshal(job)
+			res = string(payload)
+		} else {
+			spec, found, specErr := configuredSubscriptionSpec(id)
+			if specErr != nil {
+				res = fmt.Sprintf(`{"status":-1,"error":%q}`, specErr.Error())
 			} else {
-				if source != "" {
-					spec.URL, spec.Source = source, source
+				if !found {
+					spec = subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath}
+				} else {
+					if source != "" {
+						spec.URL, spec.Source = source, source
+					}
+					if requested := r.FormValue("snapshot_path"); requested != "" {
+						spec.SnapshotPath = snapshotPath
+					}
 				}
-				if requested := r.FormValue("snapshot_path"); requested != "" {
-					spec.SnapshotPath = snapshotPath
+				job := subscriptionScheduler.RunNowSpec(spec)
+				if job == nil {
+					res = `{"status":-1,"error":"subscription scheduler is not ready"}`
+				} else {
+					payload, _ := json.Marshal(job)
+					res = string(payload)
 				}
 			}
-			return refreshSubscriptionResult(ctx, spec)
-		})
-		payload, _ := json.Marshal(job)
-		res = string(payload)
+		}
 	} else if path == "/subscriptions/job/status" {
 		job := subscriptionJobs.Get(r.FormValue("job_id"))
 		if job == nil {

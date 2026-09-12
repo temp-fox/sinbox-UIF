@@ -69,6 +69,28 @@ func TestSubscriptionSpecsFromLegacySectionConfig(t *testing.T) {
 	}
 }
 
+func TestSubscriptionSpecsAssignStableIDsForLegacyEntries(t *testing.T) {
+	config := map[string]interface{}{
+		"subscribe": []interface{}{
+			map[string]interface{}{"tag": "legacy", "data": "https://legacy.example/list"},
+		},
+	}
+	first, err := subscriptionSpecsFromConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := subscriptionSpecsFromConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0].ID == "" || first[0].ID != second[0].ID {
+		t.Fatalf("legacy ID was not stable: first=%#v second=%#v", first, second)
+	}
+	if !strings.HasPrefix(first[0].ID, "legacy-subscription-") {
+		t.Fatalf("unexpected legacy ID: %q", first[0].ID)
+	}
+}
+
 func TestValidateSubscriptionResultRejectsEmptyBody(t *testing.T) {
 	if _, err := validateSubscriptionResult(" \n\t"); err == nil {
 		t.Fatal("empty subscription response was accepted")

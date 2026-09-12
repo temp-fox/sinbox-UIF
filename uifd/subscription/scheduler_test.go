@@ -156,6 +156,34 @@ func TestSchedulerStartupJitterIsStableAndReloadValidates(t *testing.T) {
 	_ = s.Stop()
 }
 
+func TestSchedulerRunNowSpecIsListedAndRunsWithoutLoadedSchedule(t *testing.T) {
+	started := make(chan struct{})
+	s := NewScheduler(func(ctx context.Context, spec SubscriptionSpec) error {
+		close(started)
+		return nil
+	})
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	job := s.RunNowSpec(SubscriptionSpec{ID: "manual-legacy", URL: "https://example.test/sub"})
+	if job == nil {
+		t.Fatal("RunNowSpec returned nil")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("manual job did not start")
+	}
+	waitScheduler(t, time.Second, func() bool {
+		task := s.GetTask("manual-legacy")
+		return task != nil && task.JobID == job.ID && task.State == Success
+	})
+	if tasks := s.Tasks(); len(tasks) != 1 || tasks[0].SubscriptionID != "manual-legacy" {
+		t.Fatalf("tasks = %#v", tasks)
+	}
+}
+
 func TestSchedulerStartRequiresExecutor(t *testing.T) {
 	s := NewScheduler(nil)
 	if err := s.Start(); err == nil {

@@ -21,7 +21,10 @@
       </el-form-item>
 
       <el-form-item label="自动更新间隔">
-        <el-select v-model.number="uif.subscribe.info.policy.update_interval_sec">
+        <el-select
+          v-model.number="uif.subscribe.info.policy.update_interval_sec"
+          @change="OnUpdateIntervalChange"
+        >
           <el-option label="关闭" :value="0"></el-option>
           <el-option label="每 1 小时" :value="3600"></el-option>
           <el-option label="每 5 小时" :value="18000"></el-option>
@@ -119,6 +122,9 @@ export default {
       ApplyCoreConfig: "uif/ApplyCoreConfig",
       UpdateSub: "uif/UpdateSub",
     }),
+    OnUpdateIntervalChange(value) {
+      this.uif.subscribe.info.policy.update_enabled = Number(value) > 0;
+    },
     SaveOrAdd() {
       if (
         this.uif.subscribe.info.tag == "" ||

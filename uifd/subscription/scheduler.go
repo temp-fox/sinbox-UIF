@@ -267,6 +267,33 @@ func (s *Scheduler) RunNow(id string) *Job {
 	return job
 }
 
+// RunNowSpec queues a manual execution and makes it visible in Tasks. It is
+// used by API callers that may submit a legacy subscription before the
+// scheduler has loaded that subscription into its schedule. When the scheduler
+// is running the normal scheduler context is used; otherwise the job still
+// runs with a background context so tests and embedded callers remain useful.
+func (s *Scheduler) RunNowSpec(spec SubscriptionSpec) *Job {
+	if spec.ID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	if s.executor == nil && s.resultExecutor == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.specs[spec.ID] = spec
+	if s.tasks[spec.ID] == nil {
+		s.tasks[spec.ID] = &ScheduleTask{SubscriptionID: spec.ID, State: Queued}
+	}
+	parent := s.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	job := s.startJobLocked(spec.ID, spec, parent)
+	s.mu.Unlock()
+	return job
+}
+
 // Cancel cancels the currently running job for a subscription.
 func (s *Scheduler) Cancel(id string) bool {
 	s.mu.Lock()

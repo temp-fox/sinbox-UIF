@@ -54,6 +54,7 @@ import {
   newDefaultHttpIn,
   newDefaultTunIn,
   newSub,
+  normalizeSubscriptionIDs,
 } from "./config";
 
 import TryParse from "@/store/uif/parser";
@@ -414,42 +415,12 @@ function UpdateInfo(res) {
 }
 
 function StartSubscriptionScheduler() {
-  if (subscriptionTimer) return;
-  subscriptionTimer = setInterval(() => {
-    if (!state.connection.isConnected) return;
-    const now = Date.now();
-    for (const [index, sub] of (configObj.state.config.subscribe || []).entries()) {
-      const policy = sub.policy || {};
-      const subID = sub.id || `legacy-${sub.tag || 'subscription'}-${index}`;
-      if (!sub.id) sub.id = subID;
-      const interval = Number(policy.update_interval_sec || 0);
-      if (!policy.update_enabled || interval <= 0 || subscriptionJobs[subID]) continue;
-      if (now - Number(sub.last_update_at || sub.updateTime || 0) < interval * 1000) continue;
-      subscriptionJobs[subID] = true;
-      const previous = state.subscribe.info;
-      state.subscribe.info = sub;
-      UpdateSub2(sub, false).then((success) => {
-        sub.last_update_status = success ? "success" : "failed";
-        sub.last_update_error = success ? "" : "subscription update failed";
-        if (success) sub.last_update_at = Date.now();
-        SaveUIFConfig();
-        if (success) ApplyCoreConfig();
-      }).catch((error) => {
-        sub.last_update_status = "failed";
-        sub.last_update_error = error.message || String(error);
-        SaveUIFConfig();
-      }).finally(() => {
-        subscriptionJobs[subID] = false;
-        state.subscribe.info = previous;
-      });
-    }
-
-  }, 3000);
+  // Refreshes are owned by the backend scheduler so manual and periodic jobs
+  // share one task registry and /subscriptions/tasks status.
+  normalizeSubscriptionIDs(configObj.state.config.subscribe || []);
 }
 
 function StopSubscriptionScheduler() {
-  if (subscriptionTimer) clearInterval(subscriptionTimer);
-  subscriptionTimer = null;
   subscriptionJobs = {};
 }
 
@@ -827,6 +798,9 @@ function GetUIFConfig() {
       state.config = InitSetting(res.data.uif, state.config);
       if (res.data.data != undefined) {
         configObj.state.config = res.data.data;
+        if (normalizeSubscriptionIDs(configObj.state.config.subscribe || [])) {
+          SaveUIFConfig();
+        }
       }
 
       if ("lang" in state.config) {

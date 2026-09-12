@@ -192,6 +192,30 @@ function newSub() {
   return res;
 }
 
+function stableSubscriptionID(item, index) {
+  var source = item && (item.data || item.url || item.source || "");
+  var tag = String(item && item.tag || "");
+  var canonical = tag + "\n" + String(source);
+  if (!tag && !source) canonical += "\n" + String(index);
+  var hash = 2166136261;
+  for (var i = 0; i < canonical.length; i += 1) {
+    hash ^= canonical.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return "legacy-subscription-" + (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function normalizeSubscriptionIDs(subscriptions) {
+  if (!Array.isArray(subscriptions)) return false;
+  var changed = false;
+  subscriptions.forEach(function (item, index) {
+    if (!item || String(item.id || "").trim()) return;
+    item.id = stableSubscriptionID(item, index);
+    changed = true;
+  });
+  return changed;
+}
+
 function NewDefaultConfig() {
   return {
     outbounds: [],
