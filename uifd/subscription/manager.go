@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -19,16 +20,23 @@ const (
 )
 
 type Job struct {
-	ID             string    `json:"job_id"`
-	Type           string    `json:"type"`
-	State          JobState  `json:"state"`
-	SubscriptionID string    `json:"subscription_id"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	FinishedAt     time.Time `json:"finished_at,omitempty"`
-	Error          string    `json:"error,omitempty"`
-	Result         string    `json:"result,omitempty"`
-	ResultBytes    int       `json:"result_bytes,omitempty"`
-	ExtraInfo      string    `json:"extra_info,omitempty"`
+	ID             string        `json:"job_id"`
+	Type           string        `json:"type"`
+	State          JobState      `json:"state"`
+	SubscriptionID string        `json:"subscription_id"`
+	StartedAt      time.Time     `json:"started_at,omitempty"`
+	FinishedAt     time.Time     `json:"finished_at,omitempty"`
+	Error          string        `json:"error,omitempty"`
+	Result         string        `json:"result,omitempty"`
+	ResultBytes    int           `json:"result_bytes,omitempty"`
+	ExtraInfo      string        `json:"extra_info,omitempty"`
+	ParseSummary   *ParseSummary `json:"parse_summary,omitempty"`
+}
+
+type ParseSummary struct {
+	Format  string `json:"format"`
+	Nodes   int    `json:"nodes"`
+	Skipped int    `json:"skipped"`
 }
 
 // JobFunc 是单个订阅任务的执行回调。回调应监听 ctx.Done，以便停止正在运行的任务。
@@ -195,6 +203,14 @@ func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFu
 		if job := m.jobs[jobID]; job != nil {
 			job.Result = result
 			job.ResultBytes = len([]byte(result))
+			var envelope struct {
+				ExtraInfo    string        `json:"extra_info"`
+				ParseSummary *ParseSummary `json:"parse_summary"`
+			}
+			if json.Unmarshal([]byte(result), &envelope) == nil {
+				job.ExtraInfo = envelope.ExtraInfo
+				job.ParseSummary = envelope.ParseSummary
+			}
 		}
 		m.mu.Unlock()
 	}

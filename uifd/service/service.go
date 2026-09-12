@@ -16,6 +16,7 @@ import (
 	"github.com/getlantern/elevate"
 	"github.com/gorilla/websocket"
 	"github.com/uif/uifd/subscription"
+	"github.com/uif/uifd/subscription/parser"
 	"github.com/uif/uifd/uif"
 )
 
@@ -131,6 +132,25 @@ func validateSubscriptionResult(result string) (string, error) {
 	return result, nil
 }
 
+func parseSubscriptionResult(result, extraInfo string) (string, error) {
+	result, err := validateSubscriptionResult(result)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := parser.Parse(result)
+	if err != nil {
+		return "", fmt.Errorf("parse subscription: %w", err)
+	}
+	if len(parsed.Nodes) == 0 {
+		return "", fmt.Errorf("subscription contains no nodes")
+	}
+	envelope, _ := json.Marshal(map[string]interface{}{
+		"body": result, "extra_info": extraInfo,
+		"parse_summary": map[string]interface{}{"format": parsed.Format, "nodes": len(parsed.Nodes), "skipped": parsed.Skipped},
+	})
+	return string(envelope), nil
+}
+
 func Service(w http.ResponseWriter, r *http.Request) {
 	// {{{
 	serviceMutext.Lock()
@@ -216,7 +236,7 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return "", err
 			}
-			result, err = validateSubscriptionResult(result)
+			result, err = parseSubscriptionResult(result, extraInfo)
 			if err != nil {
 				return "", err
 			}
@@ -224,8 +244,7 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			case <-ctx.Done():
 				return "", ctx.Err()
 			default:
-				envelope, _ := json.Marshal(map[string]string{"body": result, "extra_info": extraInfo})
-				return string(envelope), nil
+				return result, nil
 			}
 		})
 		payload, _ := json.Marshal(job)

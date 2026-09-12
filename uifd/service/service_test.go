@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,33 @@ func TestValidateSubscriptionResultKeepsBody(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("result = %q, want %q", got, want)
+	}
+}
+
+func TestParseSubscriptionResultReturnsCompatibleEnvelopeAndSummary(t *testing.T) {
+	result, err := parseSubscriptionResult("trojan://secret@example.com:443#node", "quota")
+	if err != nil {
+		t.Fatalf("parseSubscriptionResult returned error: %v", err)
+	}
+	var envelope struct {
+		Body         string `json:"body"`
+		ExtraInfo    string `json:"extra_info"`
+		ParseSummary struct {
+			Format string `json:"format"`
+			Nodes  int    `json:"nodes"`
+		} `json:"parse_summary"`
+	}
+	if err := json.Unmarshal([]byte(result), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Body == "" || envelope.ExtraInfo != "quota" || envelope.ParseSummary.Format != "v2rayn" || envelope.ParseSummary.Nodes != 1 {
+		t.Fatalf("unexpected envelope: %#v", envelope)
+	}
+}
+
+func TestParseSubscriptionResultRejectsUnparseableBody(t *testing.T) {
+	if _, err := parseSubscriptionResult("not a subscription", ""); err == nil {
+		t.Fatal("unparseable subscription was accepted")
 	}
 }
 

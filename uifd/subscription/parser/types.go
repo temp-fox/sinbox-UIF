@@ -31,8 +31,9 @@ type Transport struct {
 // ParseResult is useful to callers that want to retain the detected input
 // format alongside the normalized nodes.
 type ParseResult struct {
-	Format string `json:"format"`
-	Nodes  []Node `json:"nodes"`
+	Format  string `json:"format"`
+	Nodes   []Node `json:"nodes"`
+	Skipped int    `json:"skipped"`
 }
 
 // Fingerprint returns a stable identity for a node. Human labels (Tag) and

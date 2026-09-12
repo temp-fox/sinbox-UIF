@@ -82,3 +82,14 @@ func TestParseDetectsFormats(t *testing.T) {
 		})
 	}
 }
+
+func TestParseReportsSkippedCandidates(t *testing.T) {
+	input := "proxies:\n  - name: supported\n    type: trojan\n    server: example.com\n    port: 443\n    password: secret\n  - name: unsupported\n    type: wireguard\n    server: example.com\n    port: 51820\n"
+	result, err := Parse(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Format != "clash" || len(result.Nodes) != 1 || result.Skipped != 1 {
+		t.Fatalf("unexpected parse summary: %#v", result)
+	}
+}
