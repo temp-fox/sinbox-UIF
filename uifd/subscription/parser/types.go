@@ -38,8 +38,10 @@ type ParseResult struct {
 
 // Fingerprint returns a stable identity for a node. Human labels (Tag) and
 // this field itself are intentionally excluded, so a renamed node still has
-// the same identity.
+// the same identity. The same defaults used by the parser are applied here so
+// a hand-built Node and a parsed Node get the same identity.
 func Fingerprint(node Node) string {
+	node = normalizeNode(node)
 	identity := struct {
 		Protocol  string                 `json:"protocol"`
 		Transport Transport              `json:"transport"`
@@ -50,23 +52,31 @@ func Fingerprint(node Node) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+func normalizeNode(node Node) Node {
+	if node.Transport.Protocol == "" {
+		node.Transport.Protocol = "tcp"
+	}
+	if node.Transport.TLSType == "" {
+		node.Transport.TLSType = "none"
+	}
+	if node.Transport.Setting == nil {
+		node.Transport.Setting = map[string]interface{}{}
+	}
+	if node.Setting == nil {
+		node.Setting = map[string]interface{}{}
+	}
+	if node.Transport.TLS == nil {
+		node.Transport.TLS = map[string]interface{}{}
+	}
+	if node.Transport.Multiplex == nil {
+		node.Transport.Multiplex = map[string]interface{}{}
+	}
+	return node
+}
+
 func withFingerprint(nodes []Node) []Node {
 	for i := range nodes {
-		if nodes[i].Transport.Protocol == "" {
-			nodes[i].Transport.Protocol = "tcp"
-		}
-		if nodes[i].Transport.TLSType == "" {
-			nodes[i].Transport.TLSType = "none"
-		}
-		if nodes[i].Transport.Setting == nil {
-			nodes[i].Transport.Setting = map[string]interface{}{}
-		}
-		if nodes[i].Setting == nil {
-			nodes[i].Setting = map[string]interface{}{}
-		}
-		if nodes[i].Transport.TLS == nil {
-			nodes[i].Transport.TLS = map[string]interface{}{}
-		}
+		nodes[i] = normalizeNode(nodes[i])
 		nodes[i].Fingerprint = Fingerprint(nodes[i])
 	}
 	return nodes
