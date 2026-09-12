@@ -93,7 +93,7 @@ var defaultState = {
     isConnecting: false,
     path: "",
     version: "-",
-    web_version: "26.01.03",
+    web_version: "26.03.11",
     coreVersion: "-",
     ip: "127.0.0.1",
     coreStatus: 3,
