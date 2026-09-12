@@ -1516,6 +1516,24 @@ function getQueryParams() {
   }
 }
 
+function ResolveAPIAddress(address) {
+  const fallback = "http://192.168.0.230:9413";
+  const value = String(address || "").trim();
+  try {
+    const parsed = new URL(value || fallback);
+    if (!["127.0.0.1", "localhost", "0.0.0.0"].includes(parsed.hostname)) {
+      return parsed.origin;
+    }
+  } catch (_) {}
+  if (typeof window !== "undefined" && window.location && window.location.hostname) {
+    const host = window.location.hostname;
+    if (!["127.0.0.1", "localhost", "0.0.0.0"].includes(host)) {
+      return `${window.location.protocol}//${host}:9413`;
+    }
+  }
+  return fallback;
+}
+
 function Init() {
   const queryParams = getQueryParams();
   var urlAddress = queryParams.get("a");
@@ -1529,9 +1547,7 @@ function Init() {
     }
   } else {
     var address = GetAPIAddress();
-    if (address != "") {
-      state.apiAddress = address;
-    }
+    state.apiAddress = ResolveAPIAddress(address);
     state.password = GetKey();
   }
 
