@@ -32,12 +32,21 @@ type Job struct {
 	ExtraInfo       string           `json:"extra_info,omitempty"`
 	ParseSummary    *ParseSummary    `json:"parse_summary,omitempty"`
 	SnapshotSummary *SnapshotSummary `json:"snapshot_summary,omitempty"`
+	ProbeSummary    *ProbeSummary    `json:"probe_summary,omitempty"`
 }
 
 type ParseSummary struct {
 	Format  string `json:"format"`
 	Nodes   int    `json:"nodes"`
 	Skipped int    `json:"skipped"`
+}
+
+type ProbeSummary struct {
+	Status    string `json:"status"`
+	Total     int    `json:"total"`
+	Completed int    `json:"completed"`
+	Healthy   int    `json:"healthy"`
+	Failed    int    `json:"failed"`
 }
 
 // JobFunc 是单个订阅任务的执行回调。回调应监听 ctx.Done，以便停止正在运行的任务。
@@ -208,11 +217,13 @@ func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFu
 				ExtraInfo       string           `json:"extra_info"`
 				ParseSummary    *ParseSummary    `json:"parse_summary"`
 				SnapshotSummary *SnapshotSummary `json:"snapshot_summary"`
+				ProbeSummary    *ProbeSummary    `json:"probe_summary"`
 			}
 			if json.Unmarshal([]byte(result), &envelope) == nil {
 				job.ExtraInfo = envelope.ExtraInfo
 				job.ParseSummary = envelope.ParseSummary
 				job.SnapshotSummary = envelope.SnapshotSummary
+				job.ProbeSummary = envelope.ProbeSummary
 			}
 		}
 		m.mu.Unlock()

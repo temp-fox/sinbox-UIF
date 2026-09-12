@@ -407,6 +407,27 @@ func ApplyProbeResults(snapshot *Snapshot, results []ProbeResult, options ProbeO
 	return applied
 }
 
+func SummarizeProbes(total int, results []ProbeResult, err error) *ProbeSummary {
+	summary := &ProbeSummary{Total: total, Completed: len(results)}
+	for _, result := range results {
+		if result.Success && result.DelayMs > 0 {
+			summary.Healthy++
+		} else {
+			summary.Failed++
+		}
+	}
+	if err != nil {
+		summary.Status = "cancelled"
+	} else if summary.Failed > 0 {
+		summary.Status = "degraded"
+	} else if total == 0 {
+		summary.Status = "skipped"
+	} else {
+		summary.Status = "healthy"
+	}
+	return summary
+}
+
 // ProbeSnapshot probes the currently eligible nodes and applies any completed
 // results, including partial results returned on cancellation.
 func ProbeSnapshot(ctx context.Context, snapshot *Snapshot, executor ProbeExecutor, options ProbeOptions) ([]ProbeResult, error) {

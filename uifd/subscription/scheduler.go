@@ -71,8 +71,17 @@ type SubscriptionSpec struct {
 // SchedulerExecutor performs one refresh. It must honor ctx cancellation.
 type SchedulerExecutor func(context.Context, SubscriptionSpec) error
 
+// SchedulerResultExecutor performs one refresh and returns the legacy result
+// envelope so the task API can expose parse/snapshot/probe summaries.
+type SchedulerResultExecutor func(context.Context, SubscriptionSpec) (string, error)
+
 // SchedulerOption configures a Scheduler.
 type SchedulerOption func(*Scheduler)
+
+// WithResultExecutor installs an executor that returns a task result envelope.
+func WithResultExecutor(fn SchedulerResultExecutor) SchedulerOption {
+	return func(s *Scheduler) { s.resultExecutor = fn }
+}
 
 // WithExecutor sets the executor when using NewScheduler(nil, options...).
 func WithExecutor(fn SchedulerExecutor) SchedulerOption {
@@ -102,29 +111,33 @@ func WithStartupJitter(max time.Duration) SchedulerOption {
 // ScheduleTask is the scheduler-owned status record. Manager jobs remain the
 // source of detailed result/error information and are available by JobID.
 type ScheduleTask struct {
-	SubscriptionID      string    `json:"subscription_id"`
-	State               JobState  `json:"state"`
-	JobID               string    `json:"job_id,omitempty"`
-	LastStartedAt       time.Time `json:"last_started_at,omitempty"`
-	LastFinishedAt      time.Time `json:"last_finished_at,omitempty"`
-	NextRunAt           time.Time `json:"next_run_at,omitempty"`
-	Error               string    `json:"error,omitempty"`
-	ConsecutiveFailures int       `json:"consecutive_failures,omitempty"`
+	SubscriptionID      string           `json:"subscription_id"`
+	State               JobState         `json:"state"`
+	JobID               string           `json:"job_id,omitempty"`
+	LastStartedAt       time.Time        `json:"last_started_at,omitempty"`
+	LastFinishedAt      time.Time        `json:"last_finished_at,omitempty"`
+	NextRunAt           time.Time        `json:"next_run_at,omitempty"`
+	Error               string           `json:"error,omitempty"`
+	ConsecutiveFailures int              `json:"consecutive_failures,omitempty"`
+	ParseSummary        *ParseSummary    `json:"parse_summary,omitempty"`
+	SnapshotSummary     *SnapshotSummary `json:"snapshot_summary,omitempty"`
+	ProbeSummary        *ProbeSummary    `json:"probe_summary,omitempty"`
 }
 
 // Scheduler manages cancellable periodic subscription jobs.
 type Scheduler struct {
-	mu            sync.Mutex
-	executor      SchedulerExecutor
-	manager       *Manager
-	startupJitter time.Duration
-	specs         map[string]SubscriptionSpec
-	tasks         map[string]*ScheduleTask
-	loops         map[string]context.CancelFunc
-	loopWG        sync.WaitGroup
-	ctx           context.Context
-	cancel        context.CancelFunc
-	running       bool
+	mu             sync.Mutex
+	executor       SchedulerExecutor
+	resultExecutor SchedulerResultExecutor
+	manager        *Manager
+	startupJitter  time.Duration
+	specs          map[string]SubscriptionSpec
+	tasks          map[string]*ScheduleTask
+	loops          map[string]context.CancelFunc
+	loopWG         sync.WaitGroup
+	ctx            context.Context
+	cancel         context.CancelFunc
+	running        bool
 }
 
 // NewScheduler creates a reusable scheduler. A nil executor is accepted so it
@@ -380,9 +393,16 @@ func (s *Scheduler) startJobLocked(id string, spec SubscriptionSpec, parent cont
 	if parent == nil {
 		parent = context.Background()
 	}
-	job := s.manager.Start(parent, id, "refresh", func(ctx context.Context) error {
-		return s.executor(ctx, spec)
-	})
+	var job *Job
+	if s.resultExecutor != nil {
+		job = s.manager.StartResult(parent, id, "refresh", func(ctx context.Context) (string, error) {
+			return s.resultExecutor(ctx, spec)
+		})
+	} else {
+		job = s.manager.Start(parent, id, "refresh", func(ctx context.Context) error {
+			return s.executor(ctx, spec)
+		})
+	}
 	task := s.tasks[id]
 	if task == nil {
 		task = &ScheduleTask{SubscriptionID: id}
@@ -415,6 +435,9 @@ func (s *Scheduler) observe(id, jobID string) {
 			task.LastStartedAt = job.StartedAt
 			task.LastFinishedAt = job.FinishedAt
 			task.Error = job.Error
+			task.ParseSummary = job.ParseSummary
+			task.SnapshotSummary = job.SnapshotSummary
+			task.ProbeSummary = job.ProbeSummary
 			if job.State == Success {
 				task.ConsecutiveFailures = 0
 			} else if job.State == Failed {

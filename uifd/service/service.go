@@ -423,7 +423,7 @@ func configuredSubscriptionSpec(id string) (subscription.SubscriptionSpec, bool,
 }
 
 func startSubscriptionScheduler() {
-	subscriptionScheduler = subscription.NewScheduler(refreshSubscription, subscription.WithJobManager(subscriptionJobs))
+	subscriptionScheduler = subscription.NewScheduler(refreshSubscription, subscription.WithResultExecutor(refreshSubscriptionResult), subscription.WithJobManager(subscriptionJobs))
 	if specs, err := subscriptionSchedulerSpecs(); err == nil {
 		if err := subscriptionScheduler.Reload(specs); err == nil {
 			if err := subscriptionScheduler.Start(); err != nil {

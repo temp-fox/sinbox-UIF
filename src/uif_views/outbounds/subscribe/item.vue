@@ -184,8 +184,23 @@
               </template>
             </el-table-column>
             <el-table-column prop="job_id" label="任务 ID" min-width="180" show-overflow-tooltip />
+            <el-table-column label="解析摘要" min-width="180" show-overflow-tooltip>
+              <template slot-scope="scope">{{ TaskParseSummary(scope.row) }}</template>
+            </el-table-column>
+            <el-table-column label="快照摘要" min-width="220" show-overflow-tooltip>
+              <template slot-scope="scope">{{ TaskSnapshotSummary(scope.row) }}</template>
+            </el-table-column>
+            <el-table-column label="探测状态" min-width="180" show-overflow-tooltip>
+              <template slot-scope="scope">{{ TaskProbeSummary(scope.row) }}</template>
+            </el-table-column>
+            <el-table-column label="错误" min-width="180" show-overflow-tooltip>
+              <template slot-scope="scope">
+                <span v-if="TaskError(scope.row)" style="color: #f56c6c">{{ TaskError(scope.row) }}</span>
+                <span v-else style="color: #909399">-</span>
+              </template>
+            </el-table-column>
             <el-table-column label="开始时间" min-width="150">
-              <template slot-scope="scope">{{ FormatHistoryTime(scope.row.last_started_at) }}</template>
+              <template slot-scope="scope">{{ FormatHistoryTime(scope.row.last_started_at || (scope.row.job && scope.row.job.started_at)) }}</template>
             </el-table-column>
             <el-table-column label="操作" width="90" align="center">
               <template slot-scope="scope">
@@ -293,9 +308,22 @@ export default {
         const tasks = Array.isArray(data)
           ? data
           : (data && (data.tasks || data.items || data.data)) || [];
-        this.subscriptionTasks = tasks.filter((task) => {
+        const filteredTasks = tasks.filter((task) => {
           return !task.subscription_id || task.subscription_id === this.SubscriptionID();
         });
+        const details = await Promise.all(filteredTasks.map(async (task) => {
+          if (!task.subscription_id) return task;
+          try {
+            const detail = await MyGet(this.APIAddress("/subscriptions/task"), {
+              id: task.subscription_id,
+            });
+            const payload = detail.data || {};
+            return Object.assign({}, task, payload.task || {}, { job: payload.job || null });
+          } catch (error) {
+            return task;
+          }
+        }));
+        this.subscriptionTasks = details;
       } catch (error) {
         this.$message.error(error.message || "获取订阅任务失败");
       } finally {
@@ -362,6 +390,38 @@ export default {
       } catch (error) {
         this.$message.error(error.message || "取消任务失败");
       }
+    },
+    TaskParseSummary(task) {
+      const summary = this.TaskData(task, "parse_summary");
+      if (!summary) return "-";
+      const format = summary.format || "unknown";
+      const nodes = summary.nodes === undefined ? "-" : summary.nodes;
+      const skipped = summary.skipped === undefined ? 0 : summary.skipped;
+      return `${format} · ${nodes} nodes · skipped ${skipped}`;
+    },
+    TaskSnapshotSummary(task) {
+      const summary = this.TaskData(task, "snapshot_summary");
+      if (!summary) return "-";
+      return `+${summary.added || 0} ~${summary.updated || 0} missing ${summary.missing || 0} -${summary.removed || 0}`;
+    },
+    TaskProbeSummary(task) {
+      const summary = this.TaskData(task, "probe_summary");
+      if (summary) {
+        return `${summary.status || "unknown"} · ${summary.healthy || 0}/${summary.total || 0} healthy`;
+      }
+      const probe = this.TaskData(task, "probe");
+      if (probe) return `${probe.status || "unknown"} · ${probe.healthy || 0}/${probe.total || 0} healthy`;
+      return "-";
+    },
+    TaskError(task) {
+      const error = task && (task.error || (task.job && task.job.error));
+      return error || "";
+    },
+    TaskData(task, key) {
+      if (!task) return null;
+      if (task[key]) return task[key];
+      if (task.job && task.job[key]) return task.job[key];
+      return null;
     },
     FormatHistoryTime(value) {
       if (!value) return "-";

@@ -22,6 +22,7 @@ type RefreshResult struct {
 	ExtraInfo       string          `json:"extra_info,omitempty"`
 	ParseSummary    ParseSummary    `json:"parse_summary"`
 	SnapshotSummary SnapshotSummary `json:"snapshot_summary"`
+	ProbeSummary    *ProbeSummary   `json:"probe_summary,omitempty"`
 }
 
 // Refresh performs one real fetch, parse, merge, and atomic snapshot publish.
@@ -78,12 +79,14 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 	if err != nil {
 		return RefreshResult{}, err
 	}
+	var probeSummary *ProbeSummary
 	if spec.Probe.Enabled && spec.Probe.Executor != nil {
 		targets := spec.Probe.targets(merged)
 		if len(spec.ProbeTargets) > 0 {
 			targets = append([]ProbeTarget(nil), spec.ProbeTargets...)
 		}
-		_, probeErr := ProbeSnapshotWithTargets(ctx, &merged, spec.Probe.Executor, targets, spec.Probe.options())
+		results, probeErr := ProbeSnapshotWithTargets(ctx, &merged, spec.Probe.Executor, targets, spec.Probe.options())
+		probeSummary = SummarizeProbes(len(targets), results, probeErr)
 		if probeErr != nil {
 			return RefreshResult{}, probeErr
 		}
@@ -98,6 +101,7 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 		Body: body, ExtraInfo: extraInfo,
 		ParseSummary:    ParseSummary{Format: parsed.Format, Nodes: len(parsed.Nodes), Skipped: parsed.Skipped},
 		SnapshotSummary: SummarizeMerge(old.Nodes, parsed.Nodes, merged.Nodes),
+		ProbeSummary:    probeSummary,
 	}, nil
 }
 
