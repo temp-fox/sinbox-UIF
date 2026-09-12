@@ -86,7 +86,7 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 	if err := os.MkdirAll(filepath.Dir(spec.SnapshotPath), 0700); err != nil {
 		return RefreshResult{}, fmt.Errorf("create snapshot directory: %w", err)
 	}
-	if err := SaveAtomicJSON(spec.SnapshotPath, merged); err != nil {
+	if err := SaveWithHistory(spec.SnapshotPath, merged, DefaultHistoryLimit); err != nil {
 		return RefreshResult{}, fmt.Errorf("save subscription snapshot: %w", err)
 	}
 	return RefreshResult{

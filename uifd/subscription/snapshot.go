@@ -6,10 +6,131 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/uif/uifd/subscription/parser"
 )
+
+// SnapshotHistoryEntry describes a retained snapshot revision.
+type SnapshotHistoryEntry struct {
+	Path      string    `json:"path"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	Size      int64     `json:"size"`
+}
+
+const DefaultHistoryLimit = 10
+
+// SnapshotHistory lists retained revision files next to snapshotPath, newest first.
+func SnapshotHistory(snapshotPath string) ([]SnapshotHistoryEntry, error) {
+	dir := filepath.Dir(snapshotPath)
+	base := filepath.Base(snapshotPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []SnapshotHistoryEntry{}, nil
+		}
+		return nil, err
+	}
+	prefix := base + ".rev-"
+	result := make([]SnapshotHistoryEntry, 0)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		result = append(result, SnapshotHistoryEntry{Path: filepath.Join(dir, entry.Name()), Name: entry.Name(), CreatedAt: info.ModTime(), Size: info.Size()})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result, nil
+}
+
+// SaveWithHistory preserves the current snapshot before publishing the new one.
+func SaveWithHistory(path string, snapshot Snapshot, limit int) error {
+	if limit <= 0 {
+		limit = DefaultHistoryLimit
+	}
+	if _, err := os.Stat(path); err == nil {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		revision := fmt.Sprintf("%s.rev-%d.json", filepath.Base(path), time.Now().UnixNano())
+		historyPath := filepath.Join(dir, revision)
+		if err := copyFile(path, historyPath); err != nil {
+			return fmt.Errorf("preserve snapshot history: %w", err)
+		}
+		if err := trimSnapshotHistory(path, limit); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return SaveAtomicJSON(path, snapshot)
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0600)
+}
+
+func trimSnapshotHistory(path string, limit int) error {
+	entries, err := SnapshotHistory(path)
+	if err != nil {
+		return err
+	}
+	if len(entries) <= limit {
+		return nil
+	}
+	for _, entry := range entries[limit:] {
+		if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// RestoreSnapshot replaces the current snapshot with a selected history file.
+func RestoreSnapshot(path, historyPath string, limit int) (Snapshot, error) {
+	entries, err := SnapshotHistory(path)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	cleanHistory, err := filepath.Abs(filepath.Clean(historyPath))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	var allowed bool
+	for _, entry := range entries {
+		entryPath, _ := filepath.Abs(filepath.Clean(entry.Path))
+		if entryPath == cleanHistory {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return Snapshot{}, errors.New("history snapshot is not allowed")
+	}
+	restored, err := LoadJSON(cleanHistory)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := SaveWithHistory(path, restored, limit); err != nil {
+		return Snapshot{}, err
+	}
+	return restored, nil
+}
 
 // Snapshot is the Go-side representation of subscription state. It is kept
 // independent from uif.json so callers can validate and merge an update before

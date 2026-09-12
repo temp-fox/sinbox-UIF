@@ -193,11 +193,51 @@ func subscriptionSnapshotPath(requested, subscriptionID string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(root, candidate)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("snapshot path must stay under workspace")
+	if err := validateWorkspacePath(root, candidate); err != nil {
+		return "", err
 	}
 	return candidate, nil
+}
+
+// validateWorkspacePath checks both lexical containment and existing symlink
+// components, including a symlinked parent of a not-yet-created snapshot.
+func validateWorkspacePath(root, candidate string) error {
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("snapshot path must stay under workspace")
+	}
+	probe := candidate
+	suffix := make([]string, 0)
+	for {
+		_, statErr := os.Lstat(probe)
+		if statErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(probe)
+			if resolveErr != nil {
+				return fmt.Errorf("resolve snapshot path: %w", resolveErr)
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			resolved, resolveErr = filepath.Abs(filepath.Clean(resolved))
+			if resolveErr != nil {
+				return resolveErr
+			}
+			resolvedRel, relErr := filepath.Rel(root, resolved)
+			if relErr != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) || filepath.IsAbs(resolvedRel) {
+				return fmt.Errorf("snapshot path must stay under workspace")
+			}
+			return nil
+		}
+		if !os.IsNotExist(statErr) {
+			return fmt.Errorf("inspect snapshot path: %w", statErr)
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return fmt.Errorf("snapshot path must stay under workspace")
+		}
+		suffix = append(suffix, filepath.Base(probe))
+		probe = parent
+	}
 }
 
 func subscriptionSource(ctx context.Context, source, raw string) (string, string, error) {
@@ -239,7 +279,7 @@ func parseAndSaveSubscriptionSnapshot(result, extraInfo, snapshotPath string) (s
 	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0700); err != nil {
 		return "", fmt.Errorf("create snapshot directory: %w", err)
 	}
-	if err := subscription.SaveAtomicJSON(snapshotPath, merged); err != nil {
+	if err := subscription.SaveWithHistory(snapshotPath, merged, subscription.DefaultHistoryLimit); err != nil {
 		return "", fmt.Errorf("save subscription snapshot: %w", err)
 	}
 	envelope, _ := json.Marshal(map[string]interface{}{
@@ -360,6 +400,78 @@ func parseSubscriptionResult(result, extraInfo string) (string, error) {
 	return string(envelope), nil
 }
 
+func subscriptionSnapshotAPI(w http.ResponseWriter, r *http.Request) bool {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path != "/subscriptions/history" && path != "/subscriptions/restore" {
+		return false
+	}
+	writeJSON := func(status int, value interface{}) { w.WriteHeader(status); _ = json.NewEncoder(w).Encode(value) }
+	if path == "/subscriptions/history" {
+		if r.Method != http.MethodGet {
+			writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return true
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		if id == "" {
+			writeJSON(http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return true
+		}
+		snapshotPath, err := subscriptionSnapshotPath(r.URL.Query().Get("snapshot_path"), id)
+		if err != nil {
+			writeJSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return true
+		}
+		entries, err := subscription.SnapshotHistory(snapshotPath)
+		if err != nil {
+			writeJSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return true
+		}
+		type historyItem struct {
+			Name      string    `json:"name"`
+			CreatedAt time.Time `json:"created_at"`
+			Size      int64     `json:"size"`
+		}
+		items := make([]historyItem, 0, len(entries))
+		for _, entry := range entries {
+			items = append(items, historyItem{Name: entry.Name, CreatedAt: entry.CreatedAt, Size: entry.Size})
+		}
+		writeJSON(http.StatusOK, items)
+		return true
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return true
+	}
+	if err := r.ParseForm(); err != nil {
+		writeJSON(http.StatusBadRequest, map[string]string{"error": "invalid form"})
+		return true
+	}
+	id, historyName := strings.TrimSpace(r.FormValue("id")), strings.TrimSpace(r.FormValue("history"))
+	if historyName == "" {
+		historyName = strings.TrimSpace(r.FormValue("history_path"))
+	}
+	if id == "" || historyName == "" {
+		writeJSON(http.StatusBadRequest, map[string]string{"error": "id and history are required"})
+		return true
+	}
+	snapshotPath, err := subscriptionSnapshotPath(r.FormValue("snapshot_path"), id)
+	if err != nil {
+		writeJSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return true
+	}
+	if filepath.Base(historyName) != historyName || strings.Contains(historyName, "\\") || strings.Contains(historyName, "/") {
+		writeJSON(http.StatusBadRequest, map[string]string{"error": "invalid history file"})
+		return true
+	}
+	restored, err := subscription.RestoreSnapshot(snapshotPath, filepath.Join(filepath.Dir(snapshotPath), historyName), subscription.DefaultHistoryLimit)
+	if err != nil {
+		writeJSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return true
+	}
+	writeJSON(http.StatusOK, map[string]interface{}{"restored": true, "snapshot": restored})
+	return true
+}
+
 func subscriptionTaskAPI(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	writeJSON := func(status int, value interface{}) {
@@ -423,6 +535,11 @@ func Service(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+
+	if subscriptionSnapshotAPI(w, r) {
+		serviceMutext.Unlock()
+		return
+	}
 
 	if subscriptionTaskAPI(w, r) {
 		serviceMutext.Unlock()
