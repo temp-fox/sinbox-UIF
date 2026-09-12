@@ -1,0 +1,14 @@
+{
+  "outbounds": [
+    {
+      "type": "vmess",
+      "tag": "sing-vmess",
+      "server": "sing.example",
+      "server_port": 443,
+      "uuid": "id",
+      "tls": {"enabled": true, "server_name": "sing.example"},
+      "transport": {"type": "ws", "path": "/ws"}
+    },
+    {"type": "selector", "tag": "auto", "outbounds": ["sing-vmess"]}
+  ]
+}

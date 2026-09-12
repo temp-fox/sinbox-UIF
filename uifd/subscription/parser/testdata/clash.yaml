@@ -1,0 +1,18 @@
+proxies:
+  - name: clash-trojan
+    type: trojan
+    server: clash.example
+    port: 443
+    password: secret
+    sni: clash.example
+    network: ws
+    ws-opts:
+      path: /proxy
+      headers:
+        Host: edge.example
+  - name: clash-ss
+    type: ss
+    server: ss.example
+    port: 8388
+    cipher: chacha20-ietf-poly1305
+    password: pass

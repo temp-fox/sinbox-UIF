@@ -1,0 +1,4 @@
+ss://YWVzLTI1Ni1nY206cGFzcw==@ss.example:8388#ss-node
+trojan://secret@trojan.example:443?security=tls&sni=trojan.example#trojan-node
+vless://uuid@example.com:443?type=ws&path=%2Fws&host=edge.example&security=tls&sni=example.com#vless-node
+hysteria2://password@hy2.example:443?sni=hy2.example&obfs=salamander&obfs-password=obfs#hy2-node
