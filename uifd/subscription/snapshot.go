@@ -244,9 +244,11 @@ func protectMinimum(nodes, old []SnapshotNode, options MergeOptions) []SnapshotN
 
 // ProbeResult is the normalized outcome of a node health check.
 type ProbeResult struct {
-	Success bool
-	DelayMs int
-	Error   string
+	Success     bool
+	DelayMs     int
+	Error       string
+	TargetIndex int
+	TargetID    string
 }
 
 // ApplyProbeResult updates health state and applies the delete/quarantine
@@ -257,6 +259,7 @@ func ApplyProbeResult(nodes []SnapshotNode, index int, result ProbeResult, optio
 	}
 	options = normalizeOptions(options)
 	node := &nodes[index]
+	node.LastProbeAt = time.Now().UnixMilli()
 	healthy := result.Success && result.DelayMs > 0
 	node.LastProbeDelayMs = -1
 	if result.Success && result.DelayMs > 0 {

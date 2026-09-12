@@ -1,0 +1,259 @@
+package subscription
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+)
+
+// ProbeTarget identifies one snapshot node to probe. Index is the position in
+// Snapshot.Nodes; ID is retained as a fallback when a snapshot is reordered.
+type ProbeTarget struct {
+	Index int
+	ID    string
+	Node  SnapshotNode
+}
+
+// ProbeExecutor performs one node probe. Implementations must honor ctx
+// cancellation and must not mutate the target.
+type ProbeExecutor interface {
+	Probe(context.Context, ProbeTarget) (ProbeResult, error)
+}
+
+// ProbeExecutorFunc adapts a function into a ProbeExecutor.
+type ProbeExecutorFunc func(context.Context, ProbeTarget) (ProbeResult, error)
+
+func (f ProbeExecutorFunc) Probe(ctx context.Context, target ProbeTarget) (ProbeResult, error) {
+	return f(ctx, target)
+}
+
+// ProbeOptions controls the worker pool and the safety policy used when
+// applying results to a snapshot.
+type ProbeOptions struct {
+	Workers                int
+	Concurrency            int
+	Timeout                time.Duration
+	MaxDelayMs             int
+	DelayThresholdMs       int
+	MaxConsecutiveFailures int
+	FailureAction          string
+	MinKeep                int
+}
+
+func (o ProbeOptions) workers() int {
+	if o.Workers > 0 {
+		return o.Workers
+	}
+	if o.Concurrency > 0 {
+		return o.Concurrency
+	}
+	return 1
+}
+
+func (o ProbeOptions) maxDelayMs() int {
+	if o.MaxDelayMs > 0 {
+		return o.MaxDelayMs
+	}
+	return o.DelayThresholdMs
+}
+
+func (o ProbeOptions) mergeOptions() MergeOptions {
+	return normalizeOptions(MergeOptions{
+		FailureAction:          o.FailureAction,
+		MinKeep:                o.MinKeep,
+		MaxConsecutiveFailures: o.MaxConsecutiveFailures,
+	})
+}
+
+// ProbePool is a bounded-concurrency probe worker pool.
+type ProbePool struct {
+	executor ProbeExecutor
+	options  ProbeOptions
+}
+
+// ProbeWorkerPool is an explicit alias for callers that prefer the worker-pool
+// name in their integration code.
+type ProbeWorkerPool = ProbePool
+
+func NewProbePool(executor ProbeExecutor, options ProbeOptions) *ProbePool {
+	return &ProbePool{executor: executor, options: options}
+}
+
+func NewProbeWorkerPool(executor ProbeExecutor, options ProbeOptions) *ProbePool {
+	return NewProbePool(executor, options)
+}
+
+// Run probes targets with bounded concurrency. Results retain target order.
+// Cancellation stops queued work and is returned after already-started probes
+// have observed cancellation. A partial result set is returned with the error.
+func (p *ProbePool) Run(ctx context.Context, targets []ProbeTarget) ([]ProbeResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p == nil || p.executor == nil {
+		return nil, errors.New("subscription probe executor is nil")
+	}
+	if len(targets) == 0 {
+		return []ProbeResult{}, nil
+	}
+
+	type indexedTarget struct {
+		position int
+		target   ProbeTarget
+	}
+	jobs := make(chan indexedTarget)
+	results := make(chan indexedResult, len(targets))
+	workers := p.options.workers()
+	if workers > len(targets) {
+		workers = len(targets)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job, ok := <-jobs:
+					if !ok {
+						return
+					}
+					result := p.runOne(ctx, job.target)
+					result.TargetIndex = job.target.Index
+					result.TargetID = job.target.ID
+					results <- indexedResult{position: job.position, result: result}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for position, target := range targets {
+			select {
+			case jobs <- indexedTarget{position: position, target: target}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	ordered := make([]*ProbeResult, len(targets))
+	for item := range results {
+		result := item.result
+		ordered[item.position] = &result
+	}
+	out := make([]ProbeResult, 0, len(targets))
+	for _, result := range ordered {
+		if result != nil {
+			out = append(out, *result)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+type indexedResult struct {
+	position int
+	result   ProbeResult
+}
+
+func (p *ProbePool) runOne(parent context.Context, target ProbeTarget) ProbeResult {
+	ctx := parent
+	cancel := func() {}
+	if p.options.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, p.options.Timeout)
+	}
+	defer cancel()
+
+	result, err := p.executor.Probe(ctx, target)
+	if err != nil {
+		result.Success = false
+		if result.Error == "" {
+			result.Error = err.Error()
+		}
+	}
+	if !result.Success || result.DelayMs <= 0 {
+		result.Success = false
+		if result.Error == "" {
+			result.Error = "probe failed"
+		}
+		return result
+	}
+	if max := p.options.maxDelayMs(); max > 0 && result.DelayMs > max {
+		result.Success = false
+		if result.Error == "" {
+			result.Error = fmt.Sprintf("probe delay %dms exceeds threshold %dms", result.DelayMs, max)
+		}
+	}
+	return result
+}
+
+// TargetsForSnapshot creates stable probe targets for enabled, non-quarantined
+// nodes. Disabled or quarantined nodes are intentionally not re-enabled by a
+// health check run.
+func TargetsForSnapshot(snapshot Snapshot) []ProbeTarget {
+	targets := make([]ProbeTarget, 0, len(snapshot.Nodes))
+	for index, node := range snapshot.Nodes {
+		if !node.Enabled || node.Quarantined {
+			continue
+		}
+		targets = append(targets, ProbeTarget{Index: index, ID: node.ID, Node: node})
+	}
+	return targets
+}
+
+// ApplyProbeResults applies pool results to snapshot node health state. It
+// matches by index first and by stable ID when the target index is stale.
+func ApplyProbeResults(snapshot *Snapshot, results []ProbeResult, options ProbeOptions) int {
+	if snapshot == nil {
+		return 0
+	}
+	merge := options.mergeOptions()
+	applied := 0
+	for _, result := range results {
+		index := result.TargetIndex
+		if index < 0 || index >= len(snapshot.Nodes) || (result.TargetID != "" && snapshot.Nodes[index].ID != result.TargetID) {
+			index = -1
+			if result.TargetID != "" {
+				for i := range snapshot.Nodes {
+					if snapshot.Nodes[i].ID == result.TargetID {
+						index = i
+						break
+					}
+				}
+			}
+		}
+		if index < 0 || index >= len(snapshot.Nodes) {
+			continue
+		}
+		ApplyProbeResult(snapshot.Nodes, index, result, merge)
+		applied++
+	}
+	if applied > 0 {
+		snapshot.UpdatedAt = time.Now()
+	}
+	return applied
+}
+
+// ProbeSnapshot probes the currently eligible nodes and applies any completed
+// results, including partial results returned on cancellation.
+func ProbeSnapshot(ctx context.Context, snapshot *Snapshot, executor ProbeExecutor, options ProbeOptions) ([]ProbeResult, error) {
+	if snapshot == nil {
+		return nil, errors.New("snapshot is nil")
+	}
+	results, err := NewProbePool(executor, options).Run(ctx, TargetsForSnapshot(*snapshot))
+	ApplyProbeResults(snapshot, results, options)
+	return results, err
+}
