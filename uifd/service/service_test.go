@@ -8,6 +8,67 @@ import (
 	"github.com/uif/uifd/uif"
 )
 
+func TestSubscriptionSpecsFromCompleteUIFConfig(t *testing.T) {
+	config := map[string]interface{}{
+		"uif": map[string]interface{}{"version": "test"},
+		"data": map[string]interface{}{
+			"subscribe": []interface{}{
+				map[string]interface{}{
+					"id":  "nested-sub",
+					"url": "https://subscription.example/list",
+					"policy": map[string]interface{}{
+						"update_enabled":      true,
+						"update_interval_sec": float64(60),
+					},
+				},
+			},
+			"routes": []interface{}{
+				map[string]interface{}{
+					"domain": "probe.example",
+					"target": map[string]interface{}{
+						"kind":            "subscription",
+						"subscription_id": "nested-sub",
+					},
+				},
+			},
+		},
+	}
+
+	specs, err := subscriptionSpecsFromConfig(config)
+	if err != nil {
+		t.Fatalf("subscriptionSpecsFromConfig returned error: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("got %d specs, want 1", len(specs))
+	}
+	spec := specs[0]
+	if spec.ID != "nested-sub" || spec.URL != "https://subscription.example/list" {
+		t.Fatalf("unexpected spec: %#v", spec)
+	}
+	if !spec.Policy.UpdateEnabled || spec.Policy.UpdateIntervalSec != 60 {
+		t.Fatalf("policy was not loaded from data.subscribe: %#v", spec.Policy)
+	}
+	if spec.Probe.TargetResolver == nil {
+		t.Fatal("probe target resolver was not configured")
+	}
+	if got := spec.Probe.TargetResolver.Resolve("nested-sub"); got != "https://probe.example" {
+		t.Fatalf("probe route endpoint = %q, want https://probe.example", got)
+	}
+}
+
+func TestSubscriptionSpecsFromLegacySectionConfig(t *testing.T) {
+	config := map[string]interface{}{
+		"subscribe": []interface{}{map[string]interface{}{"id": "legacy-sub", "source": "https://legacy.example/list"}},
+	}
+	specs, err := subscriptionSpecsFromConfig(config)
+	if err != nil {
+		t.Fatalf("subscriptionSpecsFromConfig returned error: %v", err)
+	}
+	if len(specs) != 1 || specs[0].ID != "legacy-sub" {
+		t.Fatalf("unexpected legacy specs: %#v", specs)
+	}
+}
+
 func TestValidateSubscriptionResultRejectsEmptyBody(t *testing.T) {
 	if _, err := validateSubscriptionResult(" \n\t"); err == nil {
 		t.Fatal("empty subscription response was accepted")

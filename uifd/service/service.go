@@ -346,15 +346,26 @@ func legacyProbeRoutes(raw interface{}) []map[string]interface{} {
 }
 
 func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
-	config, err := uif.ReadUIFConfigJson()
-	if err != nil {
+	// 读取完整的 uif.json。ReadUIFConfigJson 只返回旧版的 "uif" 节，
+	// 而订阅和探测路由实际保存在 data.subscribe 与 data.routes。
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(uif.ReadUIFConfig()), &config); err != nil {
 		return nil, err
 	}
 	return subscriptionSpecsFromConfig(config)
 }
 
 func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.SubscriptionSpec, error) {
-	raw, ok := config["subscribe"]
+	// 兼容调用方传入已经提取的节，但优先处理磁盘上的完整 UIF 文档。
+	section := config
+	if rawData, exists := config["data"]; exists {
+		var ok bool
+		section, ok = rawData.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("parse UIF data config: expected object")
+		}
+	}
+	raw, ok := section["subscribe"]
 	if !ok || raw == nil {
 		return nil, nil
 	}
@@ -406,11 +417,8 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 }
 
 func configuredSubscriptionSpec(id string) (subscription.SubscriptionSpec, bool, error) {
-	config, err := uif.ReadUIFConfigJson()
-	if err != nil {
-		return subscription.SubscriptionSpec{}, false, err
-	}
-	specs, err := subscriptionSpecsFromConfig(config)
+	// 使用与 scheduler 相同的完整文档读取逻辑，让手动任务也能看到 data.subscribe。
+	specs, err := subscriptionSchedulerSpecs()
 	if err != nil {
 		return subscription.SubscriptionSpec{}, false, err
 	}
@@ -420,6 +428,14 @@ func configuredSubscriptionSpec(id string) (subscription.SubscriptionSpec, bool,
 		}
 	}
 	return subscription.SubscriptionSpec{}, false, nil
+}
+
+func reloadSubscriptionScheduler() error {
+	specs, err := subscriptionSchedulerSpecs()
+	if err != nil {
+		return err
+	}
+	return subscriptionScheduler.Reload(specs)
 }
 
 func startSubscriptionScheduler() {
@@ -612,6 +628,9 @@ func Service(w http.ResponseWriter, r *http.Request) {
 		shareConfig := r.FormValue("shareConfig")
 		uif.SaveUIFConfig(config)
 		uif.SaveShareConfig(shareConfig)
+		if err := reloadSubscriptionScheduler(); err != nil {
+			uif.WriteLog("subscription scheduler reload failed: " + err.Error())
+		}
 		uif.SetCoreAutoRestartTicker()
 	} else if path == "/run_core" {
 		TryOpenPort(r.FormValue("inboudPorts"))
