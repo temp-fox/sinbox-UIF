@@ -2,6 +2,7 @@
   <el-cascader
     filterable
     @focus="UpdateOutOptions"
+    @change="$emit('change', $event)"
     :placeholder="placeholder"
     v-model="outbound.id"
     :options="UpdateOutOptions()"
@@ -73,7 +74,7 @@ export default {
         if (!("id" in i)) {
           i["id"] = uuidv4();
         }
-        var subOut = [];
+        var subOut = [{ value: `subscription:${i.id}`, label: `${i.tag}（自动选优）` }];
         for (var j in i["outbounds"]) {
           j = i["outbounds"][j];
           if (!j["enabled"]) {

@@ -326,6 +326,7 @@ import {
 import {
   In2Out
 } from '@/store/uif/parser/uif_in_2_out';
+import { subscriptionOutboundTag, subscriptionUrltestOutbound } from '@/store/uif/parser/route_target';
 
 export function BuildEnableOutList(res, outbounds, subscriptions = []) {
   var urlTestTag = "autoSelete"
@@ -342,13 +343,11 @@ export function BuildEnableOutList(res, outbounds, subscriptions = []) {
   var groups = {}
   for (var sub of subscriptions) {
     if (!sub || !sub.id) continue
-    var groupTag = `sub::${sub.id}::urltest`
+    var groupTag = subscriptionOutboundTag(sub.id)
     var groupNodes = (sub.outbounds || []).filter((node) => node.enabled && !node.quarantined).map((node) => node.core_tag || node.tag)
-    if (groupNodes.length > 1) {
-      res['outbounds'].push({ type: 'urltest', tag: groupTag, outbounds: groupNodes, url: uif.state.config.urlTest.testURL, interval: i, idle_timeout: i, tolerance: parseInt(uif.state.config.urlTest.tolerance) })
+    if (groupNodes.length > 0) {
+      res['outbounds'].push(subscriptionUrltestOutbound(sub.id, groupNodes, { url: uif.state.config.urlTest.testURL, interval: i, idle_timeout: i, tolerance: parseInt(uif.state.config.urlTest.tolerance) }))
       groups[sub.id] = groupTag
-    } else if (groupNodes.length === 1) {
-      groups[sub.id] = groupNodes[0]
     }
   }
   var proxy = res['outbounds'][0]
@@ -578,7 +577,7 @@ export function AddRouteList(res, uifConfig, routeList, isShare) {
     usingSeletor['tag'] = ruleTag
     var out = item['outbound']
     if (item.target && item.target.kind === 'subscription') {
-      const groupTag = `sub::${item.target.subscription_id}::urltest`
+      const groupTag = subscriptionOutboundTag(item.target.subscription_id)
       const sub = (uifConfig.subscriptions || []).find((entry) => entry.id === item.target.subscription_id)
       if (sub && res.outbounds.some((entry) => entry.tag === groupTag)) out = groupTag
     } else if (Array.isArray(item.id) && item.id.length) {

@@ -320,6 +320,10 @@ import {
   FindInByID,
 } from "@/store/uif/config.js";
 import { DeepCopy } from "@/utils";
+import {
+  normalizeRouteTarget,
+  selectorPathForRoute,
+} from "@/store/uif/parser/route_target";
 
 export default {
   name: "routing_list",
@@ -354,7 +358,15 @@ export default {
       this.ApplyCoreConfig();
     },
     ShowOutboud(row) {
-      if ("id" in row) {
+      if (row.target && row.target.kind === "subscription") {
+        const subscription = (this.config.config.subscribe || []).find(
+          (item) => item.id === row.target.subscription_id,
+        );
+        return subscription
+          ? `${subscription.tag}（自动选优）`
+          : `订阅自动选优（${row.target.subscription_id}）`;
+      }
+      if ("id" in row && Array.isArray(row.id) && row.id.length) {
         var id = row["id"][row["id"].length - 1];
         var out = FindOutByID(id);
         if (out != null) {
@@ -372,6 +384,11 @@ export default {
       this.uif.route.all_list = this.config.config.routes;
       this.uif.route.index = index;
       this.uif.route.info = DeepCopy(row);
+      normalizeRouteTarget(this.uif.route.info);
+      this.uif.route.info.id = selectorPathForRoute(
+        this.uif.route.info,
+        this.config.config.subscribe || [],
+      );
       this.uif.route.isAdding = false;
       this.uif.route.isOpen = true;
     },

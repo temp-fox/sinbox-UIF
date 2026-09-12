@@ -46,6 +46,7 @@
                     :placeholder="$translator({ cn: '必填', en: 'Required' })"
                     :outbound="uif.route.info"
                     :isDetour="false"
+                    @change="handleOutboundChange"
                   />
                 </el-form-item>
               </el-tooltip>
@@ -427,6 +428,12 @@
 <script>
 import { mapActions, mapState } from "vuex";
 import out_seletor from "@/uif_views/outbounds/my_servers/out_seletor.vue";
+import {
+  applyRouteSelector,
+  normalizeRouteTarget,
+  selectorPathForRoute,
+  subscriptionIdFromRoute,
+} from "@/store/uif/parser/route_target";
 
 export default {
   name: "routing_info",
@@ -498,6 +505,17 @@ export default {
     handlePortChange(value) {
       // 确保选中的值是整数
       this.uif.route.info.port = value.map(Number);
+    },
+    normalizeRouteInfo() {
+      normalizeRouteTarget(this.uif.route.info);
+      const subscriptions = (this.config.config && this.config.config.subscribe) || [];
+      this.uif.route.info.id = selectorPathForRoute(this.uif.route.info, subscriptions);
+    },
+    handleOutboundChange(value) {
+      applyRouteSelector(this.uif.route.info, value);
+    },
+    selectedSubscriptionId() {
+      return subscriptionIdFromRoute(this.uif.route.info);
     },
     UpdateOutOptions() {
       this.outOptions = [];
@@ -578,6 +596,7 @@ export default {
       return true;
     },
     Save() {
+      this.normalizeRouteInfo();
       if (this.IsEmpty()) {
         this.$message({
           type: "error",
