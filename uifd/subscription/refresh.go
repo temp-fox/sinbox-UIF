@@ -62,6 +62,11 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 	if len(parsed.Nodes) == 0 {
 		return RefreshResult{}, errors.New("subscription contains no nodes")
 	}
+	if spec.Probe.Enabled {
+		if err := validateProbeExecutor(spec.Probe.Executor); err != nil {
+			return RefreshResult{}, err
+		}
+	}
 	old := spec.Snapshot
 	loaded, err := Load(spec.SnapshotPath)
 	if err == nil {

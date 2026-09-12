@@ -72,6 +72,21 @@ func TestRefreshHTTPServerUpdatesSnapshotAndKeepsItOnFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshRejectsEnabledProbeWithoutExecutorBeforeSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-executor.json")
+	_, err := Refresh(context.Background(), SubscriptionSpec{
+		ID: "missing-executor", URL: "memory://subscription", SnapshotPath: path,
+		Probe: ProbeConfig{Enabled: true},
+	}, func(context.Context, string) (string, string, error) {
+		return "trojan://secret@example.com:443#one", "", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "probe executor") {
+		t.Fatalf("refresh error = %v, want missing executor", err)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("snapshot exists after rejected refresh: %v", statErr)
+	}
+}
 func TestRefreshRunsProbeBeforeAtomicSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "probed.json")
 	var seen []ProbeTarget

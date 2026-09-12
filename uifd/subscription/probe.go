@@ -95,6 +95,24 @@ type ProbeExecutor interface {
 	Probe(context.Context, ProbeTarget) (ProbeResult, error)
 }
 
+// ProbeExecutorValidator lets refresh reject an unavailable runtime before
+// changing the snapshot. Individual node failures remain health results.
+type ProbeExecutorValidator interface {
+	Validate() error
+}
+
+func validateProbeExecutor(executor ProbeExecutor) error {
+	if executor == nil {
+		return errors.New("subscription probe executor is nil")
+	}
+	if validator, ok := executor.(ProbeExecutorValidator); ok {
+		if err := validator.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ProbeExecutorFunc adapts a function into a ProbeExecutor.
 type ProbeExecutorFunc func(context.Context, ProbeTarget) (ProbeResult, error)
 

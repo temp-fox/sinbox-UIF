@@ -24,9 +24,10 @@ import (
 var serviceMutext sync.Mutex
 var subscriptionJobs = subscription.NewManager()
 
-// The default deliberately refuses to claim per-node health. An HTTP URL
-// probe can be injected explicitly, but it cannot prove a node's proxy path.
-var subscriptionProbeExecutor subscription.ProbeExecutor = subscription.UnsupportedProbeExecutor{}
+// The service default uses an isolated sing-box process for every node probe.
+// It never reuses UIF's long-running core, so refresh probes do not touch
+// WT/TUN/nft state. Tests and embedding callers may replace it explicitly.
+var subscriptionProbeExecutor subscription.ProbeExecutor = subscription.NewSingBoxProbeExecutor(uif.GetCorePath())
 var subscriptionProbeExecutorConfigured bool
 var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobManager(subscriptionJobs))
 
@@ -349,6 +350,10 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 	if err != nil {
 		return nil, err
 	}
+	return subscriptionSpecsFromConfig(config)
+}
+
+func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.SubscriptionSpec, error) {
 	raw, ok := config["subscribe"]
 	if !ok || raw == nil {
 		return nil, nil
@@ -398,6 +403,23 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy, Probe: probe, ProbeTargets: item.ProbeTargets})
 	}
 	return specs, nil
+}
+
+func configuredSubscriptionSpec(id string) (subscription.SubscriptionSpec, bool, error) {
+	config, err := uif.ReadUIFConfigJson()
+	if err != nil {
+		return subscription.SubscriptionSpec{}, false, err
+	}
+	specs, err := subscriptionSpecsFromConfig(config)
+	if err != nil {
+		return subscription.SubscriptionSpec{}, false, err
+	}
+	for _, spec := range specs {
+		if spec.ID == id {
+			return spec, true, nil
+		}
+	}
+	return subscription.SubscriptionSpec{}, false, nil
 }
 
 func startSubscriptionScheduler() {
@@ -660,7 +682,21 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			if raw != "" {
 				return parseAndSaveSubscriptionSnapshot(raw, "", snapshotPath)
 			}
-			return refreshSubscriptionResult(ctx, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath})
+			spec, found, err := configuredSubscriptionSpec(id)
+			if err != nil {
+				return "", fmt.Errorf("load subscription policy and probe config: %w", err)
+			}
+			if !found {
+				spec = subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath}
+			} else {
+				if source != "" {
+					spec.URL, spec.Source = source, source
+				}
+				if requested := r.FormValue("snapshot_path"); requested != "" {
+					spec.SnapshotPath = snapshotPath
+				}
+			}
+			return refreshSubscriptionResult(ctx, spec)
 		})
 		payload, _ := json.Marshal(job)
 		res = string(payload)

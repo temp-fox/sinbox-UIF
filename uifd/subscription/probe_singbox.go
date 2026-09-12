@@ -33,6 +33,24 @@ func NewSingBoxProbeExecutor(corePath string) *SingBoxProbeExecutor {
 	return &SingBoxProbeExecutor{CorePath: corePath, ReadinessTimeout: 5 * time.Second, OutboundTag: "uif-probe-node"}
 }
 
+func (e *SingBoxProbeExecutor) Validate() error {
+	if e == nil {
+		return errors.New("sing-box probe executor is nil")
+	}
+	path := strings.TrimSpace(e.CorePath)
+	if path == "" {
+		return errors.New("sing-box probe core path is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("sing-box probe core is unavailable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("sing-box probe core path is not a regular file")
+	}
+	return nil
+}
+
 func (e *SingBoxProbeExecutor) Probe(ctx context.Context, target ProbeTarget) (ProbeResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -40,15 +58,8 @@ func (e *SingBoxProbeExecutor) Probe(ctx context.Context, target ProbeTarget) (P
 	if e == nil {
 		return failedProbe("sing-box probe executor is nil")
 	}
-	if strings.TrimSpace(e.CorePath) == "" {
-		return failedProbe("sing-box probe core path is empty")
-	}
-	info, err := os.Stat(e.CorePath)
-	if err != nil {
-		return failedProbe(fmt.Sprintf("sing-box probe core is unavailable: %v", err))
-	}
-	if !info.Mode().IsRegular() {
-		return failedProbe("sing-box probe core path is not a regular file")
+	if err := e.Validate(); err != nil {
+		return failedProbe(err.Error())
 	}
 	if err := ctx.Err(); err != nil {
 		return failedProbe(err.Error())

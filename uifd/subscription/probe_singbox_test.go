@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+func TestSingBoxProbeExecutorValidateRejectsMissingCore(t *testing.T) {
+	if err := NewSingBoxProbeExecutor(t.TempDir() + "/missing-sing-box").Validate(); err == nil || !strings.Contains(err.Error(), "core is unavailable") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
 func TestSingBoxProbeExecutorRejectsMissingCoreClearly(t *testing.T) {
 	result, err := NewSingBoxProbeExecutor(t.TempDir()+"/missing-sing-box").Probe(context.Background(), ProbeTarget{})
 	if err == nil || result.Success || !strings.Contains(result.Error, "core is unavailable") {
@@ -41,8 +47,6 @@ func TestSingBoxProbeExecutorRunsIsolatedCoreAndDelay(t *testing.T) {
 	}
 }
 
-// TestSingBoxProbeHelper is a fake executable core. It only runs in the child
-// process created by TestSingBoxProbeExecutorRunsIsolatedCoreAndDelay.
 func TestSingBoxProbeHelper(t *testing.T) {
 	if os.Getenv("UIF_SINGBOX_PROBE_HELPER") != "1" {
 		return
