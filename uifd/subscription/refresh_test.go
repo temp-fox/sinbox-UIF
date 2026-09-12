@@ -72,6 +72,41 @@ func TestRefreshHTTPServerUpdatesSnapshotAndKeepsItOnFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshRunsProbeBeforeAtomicSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "probed.json")
+	var seen []ProbeTarget
+	executor := ProbeExecutorFunc(func(_ context.Context, target ProbeTarget) (ProbeResult, error) {
+		seen = append(seen, target)
+		if target.Address == "slow.example" {
+			return ProbeResult{Success: true, DelayMs: 250}, nil
+		}
+		return ProbeResult{Success: true, DelayMs: 20}, nil
+	})
+	spec := SubscriptionSpec{
+		ID: "probed", URL: "memory://subscription", SnapshotPath: path,
+		Probe: ProbeConfig{Enabled: true, DefaultURL: "https://probe.invalid/204", Executor: executor, ThresholdMs: 100, MaxConsecutiveFailures: 1, FailureAction: "quarantine", MinKeep: 1},
+	}
+	fetch := func(context.Context, string) (string, string, error) {
+		return "trojan://secret@fast.example:443#fast\ntrojan://secret@slow.example:443#slow", "", nil
+	}
+	if _, err := Refresh(context.Background(), spec, fetch); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0].URL != "https://probe.invalid/204" || seen[0].Address == "" {
+		t.Fatalf("probe targets = %#v", seen)
+	}
+	if snapshot.Nodes[0].LastProbeStatus != "healthy" || snapshot.Nodes[0].LastProbeDelayMs != 20 {
+		t.Fatalf("healthy node = %#v", snapshot.Nodes[0])
+	}
+	if snapshot.Nodes[1].LastProbeStatus != "failed" || !snapshot.Nodes[1].Quarantined {
+		t.Fatalf("slow node = %#v", snapshot.Nodes[1])
+	}
+}
+
 func TestSchedulerRunsRealRefreshPeriodically(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("trojan://secret@example.com:443#scheduled"))

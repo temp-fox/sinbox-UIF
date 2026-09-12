@@ -23,7 +23,15 @@ import (
 
 var serviceMutext sync.Mutex
 var subscriptionJobs = subscription.NewManager()
+var subscriptionProbeExecutor subscription.ProbeExecutor
 var subscriptionScheduler = subscription.NewScheduler(nil, subscription.WithJobManager(subscriptionJobs))
+
+// SetSubscriptionProbeExecutor injects the node probe implementation used by
+// scheduled refreshes. The service does not require a sing-box process; tests
+// and embedding callers can provide any ProbeExecutor.
+func SetSubscriptionProbeExecutor(executor subscription.ProbeExecutor) {
+	subscriptionProbeExecutor = executor
+}
 
 var APIServer http.Server
 var WebServer http.Server
@@ -250,6 +258,9 @@ func refreshSubscriptionResult(ctx context.Context, spec subscription.Subscripti
 		}
 		spec.SnapshotPath = path
 	}
+	if spec.Probe.Enabled && spec.Probe.Executor == nil {
+		spec.Probe.Executor = subscriptionProbeExecutor
+	}
 	result, err := subscription.Refresh(ctx, spec, func(fetchCtx context.Context, source string) (string, string, error) {
 		return subscriptionSource(fetchCtx, source, "")
 	})
@@ -284,6 +295,8 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 		Data         string                      `json:"data"`
 		SnapshotPath string                      `json:"snapshot_path"`
 		Policy       subscription.SchedulePolicy `json:"policy"`
+		Probe        subscription.ProbeConfig    `json:"probe"`
+		ProbeTargets []subscription.ProbeTarget  `json:"probe_targets"`
 	}
 	if err := json.Unmarshal(data, &items); err != nil {
 		return nil, fmt.Errorf("parse subscription config: %w", err)
@@ -305,7 +318,7 @@ func subscriptionSchedulerSpecs() ([]subscription.SubscriptionSpec, error) {
 		if err != nil {
 			return nil, err
 		}
-		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy})
+		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy, Probe: item.Probe, ProbeTargets: item.ProbeTargets})
 	}
 	return specs, nil
 }

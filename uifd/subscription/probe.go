@@ -11,9 +11,68 @@ import (
 // ProbeTarget identifies one snapshot node to probe. Index is the position in
 // Snapshot.Nodes; ID is retained as a fallback when a snapshot is reordered.
 type ProbeTarget struct {
-	Index int
-	ID    string
-	Node  SnapshotNode
+	Index   int          `json:"index"`
+	ID      string       `json:"id,omitempty"`
+	URL     string       `json:"url,omitempty"`
+	Address string       `json:"address,omitempty"`
+	Port    int          `json:"port,omitempty"`
+	Node    SnapshotNode `json:"node"`
+}
+
+const DefaultProbeURL = "https://www.gstatic.com/generate_204"
+
+// ProbeConfig enables probing for a refresh and carries its optional targets.
+// Targets are normally generated from the refreshed snapshot; explicit targets
+// are useful for tests and callers that need a custom endpoint.
+type ProbeConfig struct {
+	Enabled                bool          `json:"enabled,omitempty"`
+	DefaultURL             string        `json:"default_url,omitempty"`
+	TimeoutMs              int           `json:"timeout_ms,omitempty"`
+	Concurrency            int           `json:"concurrency,omitempty"`
+	ThresholdMs            int           `json:"threshold_ms,omitempty"`
+	MaxConsecutiveFailures int           `json:"max_consecutive_failures,omitempty"`
+	FailureAction          string        `json:"failure_action,omitempty"`
+	MinKeep                int           `json:"min_keep,omitempty"`
+	Options                ProbeOptions  `json:"options,omitempty"`
+	Targets                []ProbeTarget `json:"targets,omitempty"`
+	Executor               ProbeExecutor `json:"-"`
+}
+
+func (c ProbeConfig) options() ProbeOptions {
+	o := c.Options
+	if c.TimeoutMs > 0 {
+		o.TimeoutMs = c.TimeoutMs
+	}
+	if c.Concurrency > 0 {
+		o.Concurrency = c.Concurrency
+	}
+	if c.ThresholdMs > 0 {
+		o.MaxDelayMs = c.ThresholdMs
+	}
+	if c.MaxConsecutiveFailures > 0 {
+		o.MaxConsecutiveFailures = c.MaxConsecutiveFailures
+	}
+	if c.FailureAction != "" {
+		o.FailureAction = c.FailureAction
+	}
+	if c.MinKeep > 0 {
+		o.MinKeep = c.MinKeep
+	}
+	if o.Timeout <= 0 && o.TimeoutMs > 0 {
+		o.Timeout = time.Duration(o.TimeoutMs) * time.Millisecond
+	}
+	return o
+}
+
+func (c ProbeConfig) targets(snapshot Snapshot) []ProbeTarget {
+	if len(c.Targets) > 0 {
+		return append([]ProbeTarget(nil), c.Targets...)
+	}
+	url := c.DefaultURL
+	if url == "" {
+		url = DefaultProbeURL
+	}
+	return TargetsForSnapshotWithURL(snapshot, url)
 }
 
 // ProbeExecutor performs one node probe. Implementations must honor ctx
@@ -32,14 +91,15 @@ func (f ProbeExecutorFunc) Probe(ctx context.Context, target ProbeTarget) (Probe
 // ProbeOptions controls the worker pool and the safety policy used when
 // applying results to a snapshot.
 type ProbeOptions struct {
-	Workers                int
-	Concurrency            int
-	Timeout                time.Duration
-	MaxDelayMs             int
-	DelayThresholdMs       int
-	MaxConsecutiveFailures int
-	FailureAction          string
-	MinKeep                int
+	Workers                int           `json:"workers,omitempty"`
+	Concurrency            int           `json:"concurrency,omitempty"`
+	Timeout                time.Duration `json:"-"`
+	TimeoutMs              int           `json:"timeout_ms,omitempty"`
+	MaxDelayMs             int           `json:"max_delay_ms,omitempty"`
+	DelayThresholdMs       int           `json:"threshold_ms,omitempty"`
+	MaxConsecutiveFailures int           `json:"max_consecutive_failures,omitempty"`
+	FailureAction          string        `json:"failure_action,omitempty"`
+	MinKeep                int           `json:"min_keep,omitempty"`
 }
 
 func (o ProbeOptions) workers() int {
@@ -204,12 +264,22 @@ func (p *ProbePool) runOne(parent context.Context, target ProbeTarget) ProbeResu
 // nodes. Disabled or quarantined nodes are intentionally not re-enabled by a
 // health check run.
 func TargetsForSnapshot(snapshot Snapshot) []ProbeTarget {
+	return TargetsForSnapshotWithURL(snapshot, "")
+}
+
+// TargetsForSnapshotWithURL creates targets using the default URL and the
+// node's parsed address. The executor decides which endpoint to use; no
+// sing-box process is required by the subscription package.
+func TargetsForSnapshotWithURL(snapshot Snapshot, defaultURL string) []ProbeTarget {
 	targets := make([]ProbeTarget, 0, len(snapshot.Nodes))
 	for index, node := range snapshot.Nodes {
 		if !node.Enabled || node.Quarantined {
 			continue
 		}
-		targets = append(targets, ProbeTarget{Index: index, ID: node.ID, Node: node})
+		targets = append(targets, ProbeTarget{
+			Index: index, ID: node.ID, URL: defaultURL,
+			Address: node.Transport.Address, Port: node.Transport.Port, Node: node,
+		})
 	}
 	return targets
 }
@@ -253,7 +323,17 @@ func ProbeSnapshot(ctx context.Context, snapshot *Snapshot, executor ProbeExecut
 	if snapshot == nil {
 		return nil, errors.New("snapshot is nil")
 	}
-	results, err := NewProbePool(executor, options).Run(ctx, TargetsForSnapshot(*snapshot))
+	return ProbeSnapshotWithTargets(ctx, snapshot, executor, TargetsForSnapshot(*snapshot), options)
+}
+
+// ProbeSnapshotWithTargets runs the worker pool and applies all completed
+// results. It is used by Refresh so targets are derived from the newly merged
+// snapshot before the single atomic save.
+func ProbeSnapshotWithTargets(ctx context.Context, snapshot *Snapshot, executor ProbeExecutor, targets []ProbeTarget, options ProbeOptions) ([]ProbeResult, error) {
+	if snapshot == nil {
+		return nil, errors.New("snapshot is nil")
+	}
+	results, err := NewProbePool(executor, options).Run(ctx, targets)
 	ApplyProbeResults(snapshot, results, options)
 	return results, err
 }

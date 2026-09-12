@@ -73,6 +73,16 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 	if err != nil {
 		return RefreshResult{}, err
 	}
+	if spec.Probe.Enabled && spec.Probe.Executor != nil {
+		targets := spec.Probe.targets(merged)
+		if len(spec.ProbeTargets) > 0 {
+			targets = append([]ProbeTarget(nil), spec.ProbeTargets...)
+		}
+		_, probeErr := ProbeSnapshotWithTargets(ctx, &merged, spec.Probe.Executor, targets, spec.Probe.options())
+		if probeErr != nil {
+			return RefreshResult{}, probeErr
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(spec.SnapshotPath), 0700); err != nil {
 		return RefreshResult{}, fmt.Errorf("create snapshot directory: %w", err)
 	}

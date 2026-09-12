@@ -64,6 +64,8 @@ type SubscriptionSpec struct {
 	SnapshotPath string         `json:"snapshot_path,omitempty"`
 	Snapshot     Snapshot       `json:"snapshot"`
 	Policy       SchedulePolicy `json:"policy"`
+	Probe        ProbeConfig    `json:"probe,omitempty"`
+	ProbeTargets []ProbeTarget  `json:"probe_targets,omitempty"`
 }
 
 // SchedulerExecutor performs one refresh. It must honor ctx cancellation.
