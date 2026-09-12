@@ -212,7 +212,7 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			if dst == "" {
 				return "", fmt.Errorf("subscription URL is empty")
 			}
-			result, _, err := uif.HTTPGetDirect(dst)
+			result, extraInfo, err := uif.HTTPGetDirectContext(ctx, dst)
 			if err != nil {
 				return "", err
 			}
@@ -224,7 +224,8 @@ func Service(w http.ResponseWriter, r *http.Request) {
 			case <-ctx.Done():
 				return "", ctx.Err()
 			default:
-				return result, nil
+				envelope, _ := json.Marshal(map[string]string{"body": result, "extra_info": extraInfo})
+				return string(envelope), nil
 			}
 		})
 		payload, _ := json.Marshal(job)

@@ -1227,7 +1227,17 @@ async function RunSubscriptionJob(sub) {
     const status = await MyPost(state.apiAddress + "/subscriptions/job/status", { job_id: job.job_id });
     const current = status.data;
     if (current.status === -1) throw new Error(current.error || "订阅任务不存在");
-    if (current.state === "success") return current.result || "";
+  if (current.state === "success") {
+    try {
+      const envelope = JSON.parse(current.result || "{}");
+      if (envelope.body !== undefined) {
+        return { body: envelope.body, extraInfo: envelope.extra_info || "" };
+      }
+    } catch (error) {
+      console.warn("subscription result envelope parse failed", error);
+    }
+    return { body: current.result || "", extraInfo: "" };
+  }
     if (["failed", "cancelled"].includes(current.state)) throw new Error(current.error || "订阅任务失败");
   }
   throw new Error("订阅任务超时");
@@ -1262,8 +1272,9 @@ async function UpdateSub2(info, isUpdatingExtraData) {
   if (info.type == "link") {
     try {
       let res = { data: { status: 0, res: rawData }, headers: {} };
-      rawData = await RunSubscriptionJob(info);
-      res.data.res = rawData;
+      let fetched = await RunSubscriptionJob(info);
+      rawData = fetched.body || fetched;
+      if (fetched.extraInfo) res.headers["extra-info"] = fetched.extraInfo;
     } catch (error) {
       console.log(error);
       Message.error({

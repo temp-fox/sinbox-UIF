@@ -28,6 +28,7 @@ type Job struct {
 	Error          string    `json:"error,omitempty"`
 	Result         string    `json:"result,omitempty"`
 	ResultBytes    int       `json:"result_bytes,omitempty"`
+	ExtraInfo      string    `json:"extra_info,omitempty"`
 }
 
 // JobFunc 是单个订阅任务的执行回调。回调应监听 ctx.Done，以便停止正在运行的任务。

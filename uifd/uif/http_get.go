@@ -48,7 +48,9 @@ type HTTPRes struct {
 	IsTimeout bool
 }
 
-func HTTPWithProxyPort(dst string, proxyPort string,
+const MaxSubscriptionBytes = 10 * 1024 * 1024
+
+func HTTPWithProxyPortContext(ctx context.Context, dst string, proxyPort string,
 	authorization string, method string, data string) (string, string, error) {
 	proxyUrl, err := url.Parse("http://127.0.0.1:" + proxyPort)
 	httpProxyAddress := http.ProxyURL(proxyUrl)
@@ -84,13 +86,15 @@ func HTTPWithProxyPort(dst string, proxyPort string,
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	// req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
-	resp, err := client.Do(req)
+	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		return "", "", err
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return "", "", fmt.Errorf("subscription HTTP status: %s", resp.Status)
+	}
 	defer resp.Body.Close()
-
-	// 提取 Content-Type 头中的编码信息
 	contentType := resp.Header.Get("Content-Type")
 	charset := "utf-8" // 默认编码为 UTF-8
 
@@ -110,10 +114,16 @@ func HTTPWithProxyPort(dst string, proxyPort string,
 	}
 
 	// 解码响应体为 UTF-8
-	utf8Reader := transform.NewReader(resp.Body, enc.NewDecoder())
+	if resp.ContentLength > MaxSubscriptionBytes {
+		return "", "", fmt.Errorf("subscription response too large")
+	}
+	utf8Reader := transform.NewReader(io.LimitReader(resp.Body, MaxSubscriptionBytes+1), enc.NewDecoder())
 	utf8Data, err := io.ReadAll(utf8Reader)
 	if err != nil {
 		return "", "", fmt.Errorf("Error decoding response body: %s", err)
+	}
+	if len(utf8Data) > MaxSubscriptionBytes {
+		return "", "", fmt.Errorf("subscription response too large")
 	}
 	extraMsg := &ExtraMsg{}
 	extraMsg.ContentDisposition = resp.Header.Get("content-disposition")
@@ -122,6 +132,15 @@ func HTTPWithProxyPort(dst string, proxyPort string,
 	extraMsgByte, _ := json.Marshal(extraMsg)
 
 	return string(utf8Data), string(extraMsgByte), nil
+}
+
+func HTTPWithProxyPort(dst string, proxyPort string,
+	authorization string, method string, data string) (string, string, error) {
+	return HTTPWithProxyPortContext(context.Background(), dst, proxyPort, authorization, method, data)
+}
+
+func HTTPGetDirectContext(ctx context.Context, dst string) (string, string, error) {
+	return HTTPWithProxyPortContext(ctx, dst, GetHttpApiPortDirect(), "", "", "")
 }
 
 func HTTPGetProxy(dst string) (string, string, error) {
