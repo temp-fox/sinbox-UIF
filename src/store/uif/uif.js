@@ -1227,7 +1227,7 @@ async function RunSubscriptionJob(sub) {
     const status = await MyPost(state.apiAddress + "/subscriptions/job/status", { job_id: job.job_id });
     const current = status.data;
     if (current.status === -1) throw new Error(current.error || "订阅任务不存在");
-  if (current.state === "success") {
+    if (current.state === "success") {
     try {
       const envelope = JSON.parse(current.result || "{}");
       if (envelope.body !== undefined) {
@@ -1269,6 +1269,7 @@ async function UpdateSub2(info, isUpdatingExtraData) {
 
   var rawData = info.data;
   const previousUpdateTime = info.updateTime;
+  const previousExtra = DeepCopy(info.extra || {});
   if (info.type == "link") {
     try {
       let res = { data: { status: 0, res: rawData }, headers: {} };
@@ -1281,12 +1282,14 @@ async function UpdateSub2(info, isUpdatingExtraData) {
         message: "请求出错！" + error,
       });
       info.updateTime = previousUpdateTime;
+      info.extra = previousExtra;
       info.last_update_status = "failed";
       info.last_update_error = error.message || String(error);
       return false;
     }
     if (res.data["status"] != 0) {
       info.updateTime = previousUpdateTime;
+      info.extra = previousExtra;
       info.last_update_status = "failed";
       info.last_update_error = res.data["res"] || "subscription request failed";
       Message.error({ message: info.last_update_error });
