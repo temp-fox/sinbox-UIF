@@ -20,17 +20,18 @@ const (
 )
 
 type Job struct {
-	ID             string        `json:"job_id"`
-	Type           string        `json:"type"`
-	State          JobState      `json:"state"`
-	SubscriptionID string        `json:"subscription_id"`
-	StartedAt      time.Time     `json:"started_at,omitempty"`
-	FinishedAt     time.Time     `json:"finished_at,omitempty"`
-	Error          string        `json:"error,omitempty"`
-	Result         string        `json:"result,omitempty"`
-	ResultBytes    int           `json:"result_bytes,omitempty"`
-	ExtraInfo      string        `json:"extra_info,omitempty"`
-	ParseSummary   *ParseSummary `json:"parse_summary,omitempty"`
+	ID              string           `json:"job_id"`
+	Type            string           `json:"type"`
+	State           JobState         `json:"state"`
+	SubscriptionID  string           `json:"subscription_id"`
+	StartedAt       time.Time        `json:"started_at,omitempty"`
+	FinishedAt      time.Time        `json:"finished_at,omitempty"`
+	Error           string           `json:"error,omitempty"`
+	Result          string           `json:"result,omitempty"`
+	ResultBytes     int              `json:"result_bytes,omitempty"`
+	ExtraInfo       string           `json:"extra_info,omitempty"`
+	ParseSummary    *ParseSummary    `json:"parse_summary,omitempty"`
+	SnapshotSummary *SnapshotSummary `json:"snapshot_summary,omitempty"`
 }
 
 type ParseSummary struct {
@@ -204,12 +205,14 @@ func (m *Manager) run(jobID string, ctx context.Context, cancel context.CancelFu
 			job.Result = result
 			job.ResultBytes = len([]byte(result))
 			var envelope struct {
-				ExtraInfo    string        `json:"extra_info"`
-				ParseSummary *ParseSummary `json:"parse_summary"`
+				ExtraInfo       string           `json:"extra_info"`
+				ParseSummary    *ParseSummary    `json:"parse_summary"`
+				SnapshotSummary *SnapshotSummary `json:"snapshot_summary"`
 			}
 			if json.Unmarshal([]byte(result), &envelope) == nil {
 				job.ExtraInfo = envelope.ExtraInfo
 				job.ParseSummary = envelope.ParseSummary
+				job.SnapshotSummary = envelope.SnapshotSummary
 			}
 		}
 		m.mu.Unlock()

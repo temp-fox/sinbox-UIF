@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -132,6 +133,89 @@ func validateSubscriptionResult(result string) (string, error) {
 	return result, nil
 }
 
+func subscriptionSnapshotPath(requested, subscriptionID string) (string, error) {
+	root, err := filepath.Abs(uif.GetWorkSpace())
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(requested) == "" {
+		name := subscriptionID
+		if name == "" {
+			name = "default"
+		}
+		name = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, name)
+		return filepath.Join(root, "subscriptions", name+".snapshot.json"), nil
+	}
+	candidate := requested
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(root, candidate)
+	}
+	candidate, err = filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("snapshot path must stay under workspace")
+	}
+	return candidate, nil
+}
+
+func subscriptionSource(ctx context.Context, source, raw string) (string, string, error) {
+	if strings.TrimSpace(raw) != "" {
+		return raw, "", nil
+	}
+	if strings.TrimSpace(source) == "" {
+		return "", "", fmt.Errorf("subscription source is empty")
+	}
+	result, extraInfo, err := uif.HTTPGetDirectContext(ctx, source)
+	if err != nil {
+		return "", "", err
+	}
+	return result, extraInfo, nil
+}
+
+func parseAndSaveSubscriptionSnapshot(result, extraInfo, snapshotPath string) (string, error) {
+	result, err := validateSubscriptionResult(result)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := parser.Parse(result)
+	if err != nil {
+		return "", fmt.Errorf("parse subscription: %w", err)
+	}
+	if len(parsed.Nodes) == 0 {
+		return "", fmt.Errorf("subscription contains no nodes")
+	}
+	old, err := subscription.Load(snapshotPath)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("load subscription snapshot: %w", err)
+	}
+	options := subscription.DefaultMergeOptions()
+	merged, err := subscription.ApplyParse(old, parsed, nil, options)
+	if err != nil {
+		return "", err
+	}
+	summary := subscription.SummarizeMerge(old.Nodes, parsed.Nodes, merged.Nodes)
+	if err := os.MkdirAll(filepath.Dir(snapshotPath), 0700); err != nil {
+		return "", fmt.Errorf("create snapshot directory: %w", err)
+	}
+	if err := subscription.SaveAtomicJSON(snapshotPath, merged); err != nil {
+		return "", fmt.Errorf("save subscription snapshot: %w", err)
+	}
+	envelope, _ := json.Marshal(map[string]interface{}{
+		"body": result, "extra_info": extraInfo,
+		"parse_summary":    map[string]interface{}{"format": parsed.Format, "nodes": len(parsed.Nodes), "skipped": parsed.Skipped},
+		"snapshot_summary": summary,
+	})
+	return string(envelope), nil
+}
+
 func parseSubscriptionResult(result, extraInfo string) (string, error) {
 	result, err := validateSubscriptionResult(result)
 	if err != nil {
@@ -227,25 +311,21 @@ func Service(w http.ResponseWriter, r *http.Request) {
 	} else if path == "/subscriptions/job" {
 		id := r.FormValue("subscription_id")
 		kind := r.FormValue("kind")
-		dst := r.FormValue("dst")
+		source := r.FormValue("source")
+		raw := r.FormValue("raw")
+		if source == "" && raw == "" {
+			source = r.FormValue("dst")
+		}
+		snapshotPath, pathErr := subscriptionSnapshotPath(r.FormValue("snapshot_path"), id)
 		job := subscriptionJobs.StartResult(nil, id, kind, func(ctx context.Context) (string, error) {
-			if dst == "" {
-				return "", fmt.Errorf("subscription URL is empty")
+			if pathErr != nil {
+				return "", pathErr
 			}
-			result, extraInfo, err := uif.HTTPGetDirectContext(ctx, dst)
+			result, extraInfo, err := subscriptionSource(ctx, source, raw)
 			if err != nil {
 				return "", err
 			}
-			result, err = parseSubscriptionResult(result, extraInfo)
-			if err != nil {
-				return "", err
-			}
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			default:
-				return result, nil
-			}
+			return parseAndSaveSubscriptionSnapshot(result, extraInfo, snapshotPath)
 		})
 		payload, _ := json.Marshal(job)
 		res = string(payload)

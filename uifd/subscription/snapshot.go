@@ -61,6 +61,53 @@ type MergeOptions struct {
 	MaxConsecutiveFailures int
 }
 
+// SnapshotSummary describes the effect of a successful parse/merge.
+// Missing nodes are still retained by the grace policy; removed nodes are no
+// longer present in the resulting snapshot.
+type SnapshotSummary struct {
+	Added   int `json:"added"`
+	Updated int `json:"updated"`
+	Missing int `json:"missing"`
+	Removed int `json:"removed"`
+}
+
+// SummarizeMerge compares the identities before and after a successful merge.
+// Updated counts matching identities, including a source-side tag/content
+// refresh that keeps the same stable identity.
+func SummarizeMerge(old []SnapshotNode, incoming []parser.Node, merged []SnapshotNode) SnapshotSummary {
+	oldSet := make(map[string]struct{}, len(old))
+	for _, node := range old {
+		oldSet[nodeFingerprint(node)] = struct{}{}
+	}
+	incomingSet := make(map[string]struct{}, len(incoming))
+	for _, node := range incoming {
+		incomingSet[parser.Fingerprint(node)] = struct{}{}
+	}
+	mergedSet := make(map[string]struct{}, len(merged))
+	for _, node := range merged {
+		mergedSet[nodeFingerprint(node)] = struct{}{}
+	}
+
+	var summary SnapshotSummary
+	for fingerprint := range incomingSet {
+		if _, ok := oldSet[fingerprint]; ok {
+			summary.Updated++
+		} else {
+			summary.Added++
+		}
+	}
+	for fingerprint := range oldSet {
+		if _, ok := incomingSet[fingerprint]; ok {
+			continue
+		}
+		summary.Missing++
+		if _, ok := mergedSet[fingerprint]; !ok {
+			summary.Removed++
+		}
+	}
+	return summary
+}
+
 func DefaultMergeOptions() MergeOptions {
 	return MergeOptions{Mode: "merge", RemoveMissing: true, MissingGraceRuns: 3, FailureAction: "quarantine", MinKeep: 1}
 }
