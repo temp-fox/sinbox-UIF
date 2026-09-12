@@ -1,4 +1,4 @@
-import { nodeFingerprint, mergeSubscriptionNodes, subscriptionDefaults, applyProbeResult } from '@/store/uif/parser/subscription'
+import { nodeFingerprint, mergeSubscriptionNodes, subscriptionDefaults, applyProbeResult, stableSubscriptionID, normalizeSubscriptions } from '@/store/uif/parser/subscription'
 
 describe('subscription state management', () => {
   const node = (address) => ({
@@ -42,6 +42,18 @@ describe('subscription state management', () => {
     expect(nodes[1].enabled).toBe(true)
   })
 
+  it('uses the same UTF-8 stable ID as the backend', () => {
+    expect(stableSubscriptionID({ tag: '中文', data: 'https://example.test/sub' }, 0)).toBe('legacy-subscription-520efc1b')
+  })
+
+  it('fills IDs and policy/probe defaults for legacy subscriptions', () => {
+    const subscriptions = [{ tag: 'legacy', data: 'https://legacy.example/list' }]
+    expect(normalizeSubscriptions(subscriptions)).toBe(true)
+    expect(subscriptions[0].id).toBe('legacy-subscription-30406cf9')
+    expect(subscriptions[0].policy.update_mode).toBe('merge')
+    expect(subscriptions[0].probe.default_url).toBe(subscriptionDefaults.probe.default_url)
+    expect(normalizeSubscriptions(subscriptions)).toBe(false)
+  })
   it('ships safe defaults for old subscriptions', () => {
     expect(subscriptionDefaults.policy.update_mode).toBe('merge')
     expect(subscriptionDefaults.probe.min_keep).toBeGreaterThan(0)

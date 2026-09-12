@@ -123,7 +123,9 @@ export default {
       UpdateSub: "uif/UpdateSub",
     }),
     OnUpdateIntervalChange(value) {
-      this.uif.subscribe.info.policy.update_enabled = Number(value) > 0;
+      const interval = Number(value) || 0;
+      this.uif.subscribe.info.policy.update_interval_sec = interval;
+      this.uif.subscribe.info.policy.update_enabled = interval > 0;
     },
     SaveOrAdd() {
       if (

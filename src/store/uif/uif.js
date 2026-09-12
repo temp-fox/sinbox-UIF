@@ -27,7 +27,7 @@ import {
   buildInboundPorts,
   validateEnabledInbounds,
 } from "./parser/inbound_validation";
-import { mergeSubscriptionNodes, applyProbeResult } from "./parser/subscription";
+import { mergeSubscriptionNodes, applyProbeResult, normalizeSubscriptions } from "./parser/subscription";
 
 var subscriptionTimer = null;
 var subscriptionJobs = {};
@@ -54,7 +54,6 @@ import {
   newDefaultHttpIn,
   newDefaultTunIn,
   newSub,
-  normalizeSubscriptionIDs,
 } from "./config";
 
 import TryParse from "@/store/uif/parser";
@@ -798,7 +797,7 @@ function GetUIFConfig() {
       state.config = InitSetting(res.data.uif, state.config);
       if (res.data.data != undefined) {
         configObj.state.config = res.data.data;
-        if (normalizeSubscriptionIDs(configObj.state.config.subscribe || [])) {
+        if (normalizeSubscriptions(configObj.state.config.subscribe || [])) {
           SaveUIFConfig();
         }
       }
@@ -1192,6 +1191,7 @@ async function RunSubscriptionJob(sub) {
   const payload = await MyPost(state.apiAddress + "/subscriptions/job", {
     subscription_id: sub.id,
     kind: "refresh",
+    source: sub.data,
     dst: sub.data,
   });
   const job = payload.data;

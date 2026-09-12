@@ -25,16 +25,16 @@
         ></el-empty>
         <el-row :gutter="5" v-else>
           <el-col
-            v-for="item in config.config.subscribe"
+            v-for="(item, index) in config.config.subscribe"
             style="margin-top: 5px"
-            :key="item.id"
+            :key="item.id || item.data || index"
             :xs="24"
             :sm="12"
             :md="8"
             :lg="6"
             :xl="4"
           >
-            <subscribe_item :subscribe_item_info="item" />
+            <subscribe_item :subscribe_item_info="item" :subscribe_index="index" />
           </el-col>
         </el-row>
       </el-card>

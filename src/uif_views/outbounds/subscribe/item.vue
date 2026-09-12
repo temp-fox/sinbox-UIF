@@ -222,6 +222,7 @@
 
 <script>
 import { formatTime, ParseTraffic, MyGet, MyPost } from "@/utils/index.js";
+import { stableSubscriptionID } from "@/store/uif/parser/subscription";
 import { mapState, mapActions } from "vuex";
 import detail from "./detail.vue";
 import out_table from "@/uif_views/outbounds/my_servers/out_table.vue";
@@ -230,7 +231,7 @@ import moment from "moment";
 
 export default {
   name: "subscribe_item",
-  props: ["subscribe_item_info"],
+  props: ["subscribe_item_info", "subscribe_index"],
   components: { detail, out_table },
   data() {
     return {
@@ -269,7 +270,11 @@ export default {
       this.SaveUIFConfig();
     },
     SubscriptionID() {
-      return this.subscribe_item_info.id || this.subscribe_item_info.data;
+      if (!this.subscribe_item_info.id) {
+        this.$set(this.subscribe_item_info, "id", stableSubscriptionID(this.subscribe_item_info, this.subscribe_index || 0));
+        this.SaveUIFConfig();
+      }
+      return this.subscribe_item_info.id;
     },
     APIAddress(path) {
       return this.uif.apiAddress.replace(/\/$/, "") + path;

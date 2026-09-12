@@ -1,5 +1,54 @@
 const isObject = (value) => value !== null && typeof value === 'object'
 
+const utf8Bytes = (text) => {
+  const bytes = []
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.codePointAt(i)
+    if (code > 0xffff) i += 1
+    if (code <= 0x7f) bytes.push(code)
+    else if (code <= 0x7ff) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f))
+    else if (code <= 0xffff) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f))
+    else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f))
+  }
+  return bytes
+}
+
+export const stableSubscriptionID = (item, index) => {
+  const source = item && (item.data || item.url || item.source || '')
+  const tag = String(item && item.tag || '')
+  let canonical = `${tag}\n${String(source)}`
+  if (!tag && !source) canonical += `\n${String(index)}`
+  let hash = 2166136261
+  utf8Bytes(canonical).forEach((byte) => {
+    hash ^= byte
+    hash = Math.imul(hash, 16777619)
+  })
+  return `legacy-subscription-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
+export const normalizeSubscriptions = (subscriptions) => {
+  if (!Array.isArray(subscriptions)) return false
+  let changed = false
+  subscriptions.forEach((item, index) => {
+    if (!isObject(item)) return
+    if (!String(item.id || '').trim()) {
+      item.id = stableSubscriptionID(item, index)
+      changed = true
+    }
+    const policy = { ...subscriptionDefaults.policy, ...(item.policy || {}) }
+    const probe = { ...subscriptionDefaults.probe, ...(item.probe || {}) }
+    if (JSON.stringify(item.policy || {}) !== JSON.stringify(policy)) {
+      item.policy = policy
+      changed = true
+    }
+    if (JSON.stringify(item.probe || {}) !== JSON.stringify(probe)) {
+      item.probe = probe
+      changed = true
+    }
+  })
+  return changed
+}
+
 const sortValue = (value, omit = new Set()) => {
   if (Array.isArray(value)) return value.map((item) => sortValue(item, omit))
   if (!isObject(value)) return value

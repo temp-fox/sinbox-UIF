@@ -6,8 +6,8 @@
     ></el-empty>
 
     <div v-else>
-      <div v-for="item in config.config.subscribe" :key="item['tag']">
-        <subscribe_item :subscribe_item_info="item" />
+      <div v-for="(item, index) in config.config.subscribe" :key="item.id || item.data || index">
+        <subscribe_item :subscribe_item_info="item" :subscribe_index="index" />
       </div>
     </div>
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/uif/uifd/subscription"
 	"github.com/uif/uifd/uif"
 )
 
@@ -89,6 +90,25 @@ func TestSubscriptionSpecsAssignStableIDsForLegacyEntries(t *testing.T) {
 	}
 	if !strings.HasPrefix(first[0].ID, "legacy-subscription-") {
 		t.Fatalf("unexpected legacy ID: %q", first[0].ID)
+	}
+}
+
+func TestSubscriptionSpecsStableIDMatchesFrontendUTF8Hash(t *testing.T) {
+	config := map[string]interface{}{
+		"subscribe": []interface{}{map[string]interface{}{"tag": "中文", "data": "https://example.test/sub"}},
+	}
+	specs, err := subscriptionSpecsFromConfig(config)
+	if err != nil || len(specs) != 1 {
+		t.Fatalf("unexpected specs: %#v, %v", specs, err)
+	}
+	if got, want := specs[0].ID, "legacy-subscription-520efc1b"; got != want {
+		t.Fatalf("stable ID = %q, want %q", got, want)
+	}
+	if got := specs[0].Policy.UpdateIntervalSec; got != 18000 {
+		t.Fatalf("default update interval = %d, want 18000", got)
+	}
+	if got := specs[0].Probe.DefaultURL; got != subscription.DefaultProbeURL {
+		t.Fatalf("default probe URL = %q, want %q", got, subscription.DefaultProbeURL)
 	}
 }
 

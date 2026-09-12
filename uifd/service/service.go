@@ -365,11 +365,12 @@ func stableLegacySubscriptionID(item map[string]interface{}, index int) string {
 	if source == "" {
 		source, _ = item["source"].(string)
 	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(tag + "\n" + source))
+	canonical := tag + "\n" + source
 	if tag == "" && source == "" {
-		_, _ = h.Write([]byte(fmt.Sprintf("\n%d", index)))
+		canonical += fmt.Sprintf("\n%d", index)
 	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(canonical))
 	return fmt.Sprintf("legacy-subscription-%08x", h.Sum32())
 }
 
@@ -411,6 +412,7 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 	}
 	var items []struct {
 		ID           string                      `json:"id"`
+		Tag          string                      `json:"tag"`
 		URL          string                      `json:"url"`
 		Source       string                      `json:"source"`
 		Data         string                      `json:"data"`
@@ -428,7 +430,7 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 	for index, item := range items {
 		id := strings.TrimSpace(item.ID)
 		if id == "" {
-			id = stableLegacySubscriptionID(map[string]interface{}{"tag": "", "data": item.Data, "url": item.URL, "source": item.Source}, index)
+			id = stableLegacySubscriptionID(map[string]interface{}{"tag": item.Tag, "data": item.Data, "url": item.URL, "source": item.Source}, index)
 		}
 		source := item.URL
 		if source == "" {
@@ -447,7 +449,14 @@ func subscriptionSpecsFromConfig(config map[string]interface{}) ([]subscription.
 		}
 		probe.SubscriptionID = id
 		probe.TargetResolver = &resolver
-		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: item.Policy, Probe: probe, ProbeTargets: item.ProbeTargets})
+		policy := item.Policy
+		if policy.UpdateMode == "" {
+			policy.UpdateMode = "merge"
+		}
+		if policy.UpdateIntervalSec == 0 {
+			policy.UpdateIntervalSec = 18000
+		}
+		specs = append(specs, subscription.SubscriptionSpec{ID: id, URL: source, Source: source, SnapshotPath: snapshotPath, Policy: policy, Probe: probe, ProbeTargets: item.ProbeTargets})
 	}
 	return specs, nil
 }
