@@ -37,6 +37,10 @@
             {{ $translator({ cn: "更新订阅", en: "Update" }) }}
           </el-dropdown-item>
 
+          <el-dropdown-item @click.native="OpenHistoryTasks" icon="el-icon-time">
+            {{ $translator({ cn: "历史/任务", en: "History / Tasks" }) }}
+          </el-dropdown-item>
+
           <el-dropdown-item
             @click.native="SpeedTest"
             icon="el-icon-odometer"
@@ -136,11 +140,73 @@
         />
       </div>
     </el-collapse-transition>
+
+    <el-dialog
+      :title="$translator({ cn: '订阅历史 / 任务', en: 'Subscription history / tasks' })"
+      :visible.sync="historyDialogVisible"
+      width="min(760px, 92vw)"
+      @close="StopTaskPolling"
+    >
+      <el-tabs v-model="historyTaskTab" @tab-click="RefreshHistoryTasks">
+        <el-tab-pane :label="$translator({ cn: '历史', en: 'History' })" name="history">
+          <el-table
+            v-loading="historyLoading"
+            :data="subscriptionHistory"
+            size="small"
+            max-height="360"
+            empty-text="暂无历史快照"
+          >
+            <el-table-column prop="name" label="文件" min-width="220" show-overflow-tooltip />
+            <el-table-column label="时间" min-width="160">
+              <template slot-scope="scope">{{ FormatHistoryTime(scope.row.created_at) }}</template>
+            </el-table-column>
+            <el-table-column label="大小" width="100" align="right">
+              <template slot-scope="scope">{{ FormatHistorySize(scope.row.size) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="90" align="center">
+              <template slot-scope="scope">
+                <el-button type="text" size="mini" @click="RestoreHistory(scope.row)">恢复</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+        <el-tab-pane :label="$translator({ cn: '任务', en: 'Tasks' })" name="tasks">
+          <el-table
+            v-loading="tasksLoading"
+            :data="subscriptionTasks"
+            size="small"
+            max-height="360"
+            empty-text="暂无任务"
+          >
+            <el-table-column prop="state" label="状态" width="110">
+              <template slot-scope="scope">
+                <el-tag size="mini" :type="TaskTagType(scope.row.state)">{{ scope.row.state || 'unknown' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="job_id" label="任务 ID" min-width="180" show-overflow-tooltip />
+            <el-table-column label="开始时间" min-width="150">
+              <template slot-scope="scope">{{ FormatHistoryTime(scope.row.last_started_at) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="90" align="center">
+              <template slot-scope="scope">
+                <el-button
+                  v-if="IsTaskActive(scope.row)"
+                  type="text"
+                  size="mini"
+                  @click="CancelTask(scope.row)"
+                >取消</el-button>
+                <span v-else style="color: #909399">-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+    </el-dialog>
   </el-card>
 </template>
 
 <script>
-import { formatTime, ParseTraffic } from "@/utils/index.js";
+import { formatTime, ParseTraffic, MyGet, MyPost } from "@/utils/index.js";
 import { mapState, mapActions } from "vuex";
 import detail from "./detail.vue";
 import out_table from "@/uif_views/outbounds/my_servers/out_table.vue";
@@ -157,6 +223,13 @@ export default {
       viewerText: "",
       isLoading: false,
       isCollapsed: false,
+      historyDialogVisible: false,
+      historyTaskTab: "history",
+      historyLoading: false,
+      tasksLoading: false,
+      subscriptionHistory: [],
+      subscriptionTasks: [],
+      taskPollingTimer: null,
     };
   },
   mounted() {
@@ -179,6 +252,132 @@ export default {
       this.isCollapsed = !this.isCollapsed;
       this.subscribe_item_info["isCollapsed"] = this.isCollapsed;
       this.SaveUIFConfig();
+    },
+    SubscriptionID() {
+      return this.subscribe_item_info.id || this.subscribe_item_info.data;
+    },
+    APIAddress(path) {
+      return this.uif.apiAddress.replace(/\/$/, "") + path;
+    },
+    async OpenHistoryTasks() {
+      this.historyDialogVisible = true;
+      await this.RefreshHistoryTasks();
+      this.StartTaskPolling();
+    },
+    async RefreshHistoryTasks() {
+      if (!this.historyDialogVisible && this.historyTaskTab === "history") return;
+      if (this.historyTaskTab === "history") {
+        this.historyLoading = true;
+        try {
+          const response = await MyGet(this.APIAddress("/subscriptions/history"), {
+            id: this.SubscriptionID(),
+          });
+          const data = response.data;
+          this.subscriptionHistory = Array.isArray(data)
+            ? data
+            : (data && (data.history || data.items || data.data)) || [];
+        } catch (error) {
+          this.$message.error(error.message || "获取订阅历史失败");
+        } finally {
+          this.historyLoading = false;
+        }
+      } else {
+        await this.LoadTasks();
+      }
+    },
+    async LoadTasks() {
+      this.tasksLoading = true;
+      try {
+        const response = await MyGet(this.APIAddress("/subscriptions/tasks"), {});
+        const data = response.data;
+        const tasks = Array.isArray(data)
+          ? data
+          : (data && (data.tasks || data.items || data.data)) || [];
+        this.subscriptionTasks = tasks.filter((task) => {
+          return !task.subscription_id || task.subscription_id === this.SubscriptionID();
+        });
+      } catch (error) {
+        this.$message.error(error.message || "获取订阅任务失败");
+      } finally {
+        this.tasksLoading = false;
+      }
+    },
+    StartTaskPolling() {
+      this.StopTaskPolling();
+      this.taskPollingTimer = setInterval(() => {
+        if (this.historyDialogVisible && this.historyTaskTab === "tasks") this.LoadTasks();
+      }, 3000);
+    },
+    StopTaskPolling() {
+      if (this.taskPollingTimer) {
+        clearInterval(this.taskPollingTimer);
+        this.taskPollingTimer = null;
+      }
+    },
+    beforeDestroy() {
+      this.StopTaskPolling();
+    },
+    async RestoreHistory(row) {
+      try {
+        await this.$confirm("恢复该历史快照将覆盖当前订阅快照，是否继续？", "提示", {
+          type: "warning",
+        });
+        this.historyLoading = true;
+        const response = await MyPost(this.APIAddress("/subscriptions/restore"), {
+          id: this.SubscriptionID(),
+          history: row.name || row.path,
+        });
+        const restored = response.data && response.data.snapshot;
+        if (restored && Array.isArray(restored.nodes)) {
+          this.subscribe_item_info.outbounds = restored.nodes;
+          this.subscribe_item_info.updateTime = restored.updated_at || Date.now();
+          this.SaveUIFConfig();
+          this.ApplyCoreConfig();
+        }
+        this.$message.success("历史快照已恢复");
+        await this.RefreshHistoryTasks();
+      } catch (error) {
+        if (error !== "cancel" && error !== "close") {
+          this.$message.error((error && error.message) || "恢复历史快照失败");
+        }
+      } finally {
+        this.historyLoading = false;
+      }
+    },
+    IsTaskActive(task) {
+      return task && ["queued", "running"].indexOf(task.state) !== -1;
+    },
+    TaskTagType(state) {
+      if (state === "success") return "success";
+      if (state === "failed" || state === "cancelled") return "danger";
+      if (state === "running") return "warning";
+      return "info";
+    },
+    async CancelTask(task) {
+      const id = task.subscription_id || this.SubscriptionID();
+      try {
+        await MyPost(this.APIAddress("/subscriptions/task/" + encodeURIComponent(id) + "/cancel"), {});
+        this.$message.success("任务已取消");
+        await this.LoadTasks();
+      } catch (error) {
+        this.$message.error(error.message || "取消任务失败");
+      }
+    },
+    FormatHistoryTime(value) {
+      if (!value) return "-";
+      const parsed = moment(value);
+      return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm:ss") : formatTime(value, "");
+    },
+    FormatHistorySize(value) {
+      if (!value) return "0 B";
+      const units = ["B", "KB", "MB", "GB"];
+      let size = Number(value);
+      let unit = 0;
+      while (size >= 1024 && unit < units.length - 1) {
+        size /= 1024;
+        unit += 1;
+      }
+      return size.toFixed(unit ? 1 : 0) + " " + units[unit];
     },
     BuildTraffic() {
       var extra = this.subscribe_item_info["extra"];
