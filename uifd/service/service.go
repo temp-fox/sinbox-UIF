@@ -591,7 +591,7 @@ func subscriptionTaskAPI(w http.ResponseWriter, r *http.Request) bool {
 			writeJSON(http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 			return true
 		}
-		writeJSON(http.StatusOK, subscriptionScheduler.Tasks())
+		writeJSON(http.StatusOK, subscriptionTasks())
 		return true
 	}
 	if path == "/subscriptions/task" {
@@ -604,12 +604,12 @@ func subscriptionTaskAPI(w http.ResponseWriter, r *http.Request) bool {
 			writeJSON(http.StatusBadRequest, map[string]string{"error": "id is required"})
 			return true
 		}
-		task := subscriptionScheduler.GetTask(id)
+		task, job := subscriptionTask(id)
 		if task == nil {
 			writeJSON(http.StatusNotFound, map[string]string{"error": "task not found"})
 			return true
 		}
-		writeJSON(http.StatusOK, map[string]interface{}{"task": task, "job": subscriptionScheduler.Job(id)})
+		writeJSON(http.StatusOK, map[string]interface{}{"task": task, "job": job})
 		return true
 	}
 	const cancelPrefix = "/subscriptions/task/"
@@ -624,15 +624,86 @@ func subscriptionTaskAPI(w http.ResponseWriter, r *http.Request) bool {
 			writeJSON(http.StatusBadRequest, map[string]string{"error": "invalid task id"})
 			return true
 		}
-		if subscriptionScheduler.GetTask(id) == nil {
+		task, _ := subscriptionTask(id)
+		if task == nil {
 			writeJSON(http.StatusNotFound, map[string]string{"error": "task not found"})
 			return true
 		}
-		cancelled := subscriptionScheduler.Cancel(id)
-		writeJSON(http.StatusOK, map[string]interface{}{"cancelled": cancelled, "task": subscriptionScheduler.GetTask(id)})
+		cancelled := subscriptionCancelTask(id)
+		updated, _ := subscriptionTask(id)
+		writeJSON(http.StatusOK, map[string]interface{}{"cancelled": cancelled, "task": updated})
 		return true
 	}
 	return false
+}
+
+// subscriptionTasks presents scheduler records and legacy Manager jobs through
+// the same API shape. Scheduler records win when a job is already represented
+// there, avoiding duplicate entries for scheduled executions.
+func subscriptionTasks() []*subscription.ScheduleTask {
+	tasks := subscriptionScheduler.Tasks()
+	seenJobs := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		if task != nil && task.JobID != "" {
+			seenJobs[task.JobID] = true
+		}
+	}
+	for _, job := range subscriptionJobs.Tasks() {
+		if job == nil || seenJobs[job.ID] {
+			continue
+		}
+		tasks = append(tasks, scheduleTaskFromJob(job))
+	}
+	return tasks
+}
+
+func scheduleTaskFromJob(job *subscription.Job) *subscription.ScheduleTask {
+	if job == nil {
+		return nil
+	}
+	return &subscription.ScheduleTask{
+		SubscriptionID:  job.SubscriptionID,
+		State:           job.State,
+		JobID:           job.ID,
+		LastStartedAt:   job.StartedAt,
+		LastFinishedAt:  job.FinishedAt,
+		Error:           job.Error,
+		ParseSummary:    job.ParseSummary,
+		SnapshotSummary: job.SnapshotSummary,
+		ProbeSummary:    job.ProbeSummary,
+	}
+}
+
+func subscriptionTask(id string) (*subscription.ScheduleTask, *subscription.Job) {
+	if task := subscriptionScheduler.GetTask(id); task != nil {
+		return task, subscriptionScheduler.Job(id)
+	}
+	job := subscriptionManagerJob(id)
+	return scheduleTaskFromJob(job), job
+}
+
+func subscriptionManagerJob(id string) *subscription.Job {
+	if job := subscriptionJobs.Get(id); job != nil {
+		return job
+	}
+	var match *subscription.Job
+	for _, job := range subscriptionJobs.Tasks() {
+		if job == nil || job.SubscriptionID != id {
+			continue
+		}
+		if match == nil || job.StartedAt.After(match.StartedAt) || (job.StartedAt.Equal(match.StartedAt) && job.ID > match.ID) {
+			match = job
+		}
+	}
+	return match
+}
+
+func subscriptionCancelTask(id string) bool {
+	if subscriptionScheduler.GetTask(id) != nil {
+		return subscriptionScheduler.Cancel(id)
+	}
+	job := subscriptionManagerJob(id)
+	return job != nil && subscriptionJobs.Cancel(job.ID)
 }
 
 func Service(w http.ResponseWriter, r *http.Request) {

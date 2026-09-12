@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -271,6 +272,23 @@ func (m *Manager) Get(id string) *Job {
 	defer m.mu.Unlock()
 	m.cleanupLocked(time.Now())
 	return copyJob(m.jobs[id])
+}
+
+// Tasks 返回当前保留的任务快照，并按任务 ID 稳定排序。
+func (m *Manager) Tasks() []*Job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupLocked(time.Now())
+	ids := make([]string, 0, len(m.jobs))
+	for id := range m.jobs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	result := make([]*Job, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, copyJob(m.jobs[id]))
+	}
+	return result
 }
 
 // Cancel 请求取消 queued/running 任务。
