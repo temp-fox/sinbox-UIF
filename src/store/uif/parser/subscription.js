@@ -128,10 +128,14 @@ export const applyProbeResult = (nodes, index, result, policy = {}) => {
   node.last_probe_delay_ms = success ? delay : -1
   node.delay = success ? String(delay) : '-1'
   node.last_probe_status = healthy ? 'healthy' : (success ? 'slow' : 'failed')
-  node.consecutive_failures = healthy ? 0 : Number(node.consecutive_failures || 0) + 1
-  if (healthy) node.quarantined = false
-  if (node.consecutive_failures >= Number(policy.max_consecutive_failures || 3)) node.quarantined = true
-  if (policy.failure_action === 'delete' && node.quarantined) {
+  node.probe_error = success ? '' : String((result && (result.error || result.msg)) || '')
+
+  // threshold_ms 只用于标记“慢”，不能把成功但较慢的代理当作失败累计。
+  // 否则默认 200ms 会把真实可用节点逐轮隔离，后续测速被跳过后表现为大量 -1。
+  node.consecutive_failures = success ? 0 : Number(node.consecutive_failures || 0) + 1
+  if (success) node.quarantined = false
+  if (!success && node.consecutive_failures >= Number(policy.max_consecutive_failures || 3)) node.quarantined = true
+  if (!success && policy.failure_action === 'delete' && node.quarantined) {
     const keep = Math.max(1, Number(policy.min_keep || 1))
     const available = nodes.filter((candidate) => candidate.enabled && !candidate.quarantined && candidate !== node).length
     if (available >= keep) node.enabled = false
@@ -154,7 +158,7 @@ export const subscriptionDefaults = {
     target_mode: 'default',
     default_url: 'https://www.gstatic.com/generate_204',
     timeout_ms: 10000,
-    concurrency: 4,
+    concurrency: 5,
     threshold_ms: 200,
     max_consecutive_failures: 3,
     failure_action: 'quarantine',

@@ -229,10 +229,10 @@
                       :placeholder="$translator({ cn: '选填', en: 'Optional' })"
                     >
                       <el-option
-                        v-for="item in ['youtube.com', 'github.com']"
-                        :key="item"
-                        :label="item"
-                        :value="item"
+                        v-for="item in domainPresets"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
                       >
                       </el-option>
                     </el-select>
@@ -252,10 +252,10 @@
                       :placeholder="$translator({ cn: '选填', en: 'Optional' })"
                     >
                       <el-option
-                        v-for="item in ['.cn', '.com']"
-                        :key="item"
-                        :label="item"
-                        :value="item"
+                        v-for="item in domainSuffixPresets"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
                       >
                       </el-option>
                     </el-select>
@@ -310,34 +310,49 @@
 
                 <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="6">
                   <el-tooltip :disabled="uif.showToolTip" placement="top">
-                    <div slot="content">预设域名规则</div>
+                      <div slot="content">选择后会追加到对应的 GeoSite、完全匹配或后缀匹配规则。</div>
                     <el-form-item
-                      :label="
-                        $translator({ cn: 'geoSite 范围', en: 'geoSite' })
-                      "
+                      :label="$translator({ cn: '常用服务', en: 'Services' })"
                     >
                       <el-select
-                        v-model="uif.route.info.geosite"
-                        multiple
+                        v-model="servicePreset"
                         filterable
-                        allow-create
+                        clearable
                         default-first-option
-                        :placeholder="
-                          $translator({ cn: '选填', en: 'Optional' })
-                        "
+                        :placeholder="$translator({ cn: '选择预设', en: 'Preset' })"
+                        @change="applyServicePreset"
                       >
                         <el-option
-                          v-for="item in siteDataList"
+                          v-for="item in servicePresets"
                           :key="item.value"
-                          :label="item.value"
+                          :label="item.label"
                           :value="item.value"
-                        >
-                          <country-flag :country="item.value" size="small" />
-                          {{ item.value }}
-                        </el-option>
+                        />
                       </el-select>
                     </el-form-item>
                   </el-tooltip>
+                </el-col>
+
+                <el-col :xs="24" :sm="12" :md="8" :lg="6" :xl="6">
+                  <el-form-item
+                    :label="$translator({ cn: 'geoSite 范围', en: 'geoSite' })"
+                  >
+                    <el-select
+                      v-model="uif.route.info.geosite"
+                      multiple
+                      filterable
+                      allow-create
+                      default-first-option
+                      :placeholder="$translator({ cn: '选填', en: 'Optional' })"
+                    >
+                      <el-option
+                        v-for="item in geoSitePresets"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                      />
+                    </el-select>
+                  </el-form-item>
                 </el-col>
               </el-row>
             </el-form>
@@ -434,6 +449,12 @@ import {
   selectorPathForRoute,
   subscriptionIdFromRoute,
 } from "@/store/uif/parser/route_target";
+import {
+  domainPresets,
+  domainSuffixPresets,
+  geoSitePresets,
+  servicePresets,
+} from "@/store/uif/parser/route_presets";
 
 export default {
   name: "routing_info",
@@ -472,25 +493,12 @@ export default {
           value: "TW",
           name: "TW",
         },
-      ] /*}}}*/,
-      siteDataList: [
-        {
-          value: "openai",
-          name: "openai",
-        },
-        {
-          value: "google",
-          name: "google",
-        },
-        {
-          value: "google-scholar",
-          name: "google-scholar",
-        },
-        {
-          value: "category-ads",
-          name: "category-ads",
-        },
       ],
+      servicePreset: "",
+      domainPresets,
+      domainSuffixPresets,
+      geoSitePresets,
+      servicePresets,
     };
   },
   computed: {
@@ -505,6 +513,26 @@ export default {
     handlePortChange(value) {
       // 确保选中的值是整数
       this.uif.route.info.port = value.map(Number);
+    },
+    applyServicePreset(value) {
+      const preset = servicePresets.find((item) => item.value === value);
+      if (!preset) return;
+
+      const fieldByKind = {
+        geosite: "geosite",
+        domain: "domain",
+        domain_suffix: "domain_suffix",
+      };
+      const field = fieldByKind[preset.kind];
+      if (!field) return;
+
+      const route = this.uif.route.info;
+      const current = Array.isArray(route[field]) ? route[field] : [];
+      const values = Array.isArray(preset.values) ? preset.values : [];
+
+      // 与 Grok 的后缀预设保持同样的写入行为，同时兼容旧规则缺少字段的情况。
+      this.$set(route, field, Array.from(new Set([...current, ...values])));
+      this.servicePreset = "";
     },
     normalizeRouteInfo() {
       normalizeRouteTarget(this.uif.route.info);

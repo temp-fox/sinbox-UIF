@@ -87,6 +87,9 @@ var subscribe = {
     },
   },
   outbounds: [],
+  // 订阅级链式代理：对整个订阅的所有节点统一套前置代理。
+  // 结构与单节点 proxy.dial.detour 一致，由 out_seletor 选择前置节点。
+  dial: DeepCopy(dial),
 };
 
 function newFreedomOut() {

@@ -136,6 +136,7 @@
         <out_table
           :outbound_list="subscribe_item_info.outbounds"
           :isSub="true"
+          :subscription_info="subscribe_item_info"
           v-else
         />
       </div>
@@ -534,7 +535,7 @@ export default {
       this.uif.share.isOpenShare = true;
     },
     SpeedTest() {
-      uif_store.actions.TestNode(this.subscribe_item_info.outbounds);
+      uif_store.actions.TestNode(this.subscribe_item_info.outbounds, this.subscribe_item_info);
       this.$message({
         type: "info",
         message: "测速已启动，完成后会更新节点延迟；失败节点不会立即删除。",

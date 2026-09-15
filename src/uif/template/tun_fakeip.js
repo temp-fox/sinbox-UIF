@@ -327,6 +327,7 @@ import {
   In2Out
 } from '@/store/uif/parser/uif_in_2_out';
 import { subscriptionOutboundTag, subscriptionUrltestOutbound } from '@/store/uif/parser/route_target';
+import { InheritSubscriptionDetour, resolveSubscriptionDetourTag } from '@/store/uif/parser/subscription_detour';
 
 export function BuildEnableOutList(res, outbounds, subscriptions = []) {
   var urlTestTag = "autoSelete"
@@ -419,10 +420,32 @@ export function InitDetour(out) {
   }
   id = id[id.length - 1]
 
+  // 前置代理是「订阅自动选优」：指向该订阅的 urltest 组（自动选最快节点）。
+  // BuildEnableOutList 会为该订阅生成同名 urltest 组，tag 必须保持一致。
+  var resolved = resolveSubscriptionDetourTag(id, subscriptionHasEnabledNode)
+  if (resolved) {
+    out['dial']['detour']['tag'] = resolved.tag
+    return
+  }
+
   var detour = FindOutByID(id)
   if (detour != null && detour['enabled']) {
     out['dial']['detour']['tag'] = detour['core_tag']
   }
+}
+
+// 判断订阅是否至少有一个启用且未隔离的节点；否则 urltest 组不会被生成，
+// 引用它会指向不存在的 tag，导致内核解码失败。
+function subscriptionHasEnabledNode(subId) {
+  var subs = config.state.config.subscribe || []
+  for (var i = 0; i < subs.length; i++) {
+    var sub = subs[i]
+    if (!sub || sub.id !== subId) {
+      continue
+    }
+    return (sub.outbounds || []).some(function (n) { return n && n.enabled && !n.quarantined })
+  }
+  return false
 }
 
 export function UpdateUniqeTagAndID(boundConfig) {
@@ -466,6 +489,7 @@ export function UpdateUniqeTagAndID(boundConfig) {
 
       out = DeepCopy(out)
       out['tag'] = out['core_tag']
+      InheritSubscriptionDetour(out, sub)
       InitDetour(out)
       res.push(out)
       i += 1

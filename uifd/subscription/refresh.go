@@ -20,6 +20,7 @@ type FetchFunc func(context.Context, string) (body, extraInfo string, err error)
 type RefreshResult struct {
 	Body            string          `json:"body"`
 	ExtraInfo       string          `json:"extra_info,omitempty"`
+	Nodes           []parser.Node    `json:"nodes"`
 	ParseSummary    ParseSummary    `json:"parse_summary"`
 	SnapshotSummary SnapshotSummary `json:"snapshot_summary"`
 	ProbeSummary    *ProbeSummary   `json:"probe_summary,omitempty"`
@@ -98,7 +99,7 @@ func Refresh(ctx context.Context, spec SubscriptionSpec, fetch FetchFunc) (Refre
 		return RefreshResult{}, fmt.Errorf("save subscription snapshot: %w", err)
 	}
 	return RefreshResult{
-		Body: body, ExtraInfo: extraInfo,
+		Body: body, ExtraInfo: extraInfo, Nodes: parsed.Nodes,
 		ParseSummary:    ParseSummary{Format: parsed.Format, Nodes: len(parsed.Nodes), Skipped: parsed.Skipped},
 		SnapshotSummary: SummarizeMerge(old.Nodes, parsed.Nodes, merged.Nodes),
 		ProbeSummary:    probeSummary,

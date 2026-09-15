@@ -53,6 +53,9 @@ const macListFile = `
 `
 
 func AutoStartup(enable bool) error {
+	if IsLinux() {
+		return autoStartupProcd(enable)
+	}
 	if !IsMacos() {
 		return errors.New("Linux use systemd.")
 	}

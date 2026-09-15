@@ -357,6 +357,11 @@ export var DELAY_TIMEOUT = 20000
 
 export function MyPost(address, param) {
   var dataList = []
+  var clientTimeout = Number(param && param.__client_timeout_ms || DELAY_TIMEOUT)
+  if (!Number.isFinite(clientTimeout) || clientTimeout <= 0) {
+    clientTimeout = DELAY_TIMEOUT
+  }
+  delete param.__client_timeout_ms
   param['key'] = GetKey()
   for (var item in param) {
     if (typeof param[item] == "object") {
@@ -374,10 +379,10 @@ export function MyPost(address, param) {
         isDone = true
         reject(new Error('Request timed out'));
       }
-    }, DELAY_TIMEOUT);
+    }, clientTimeout);
 
     axios.post(address, data, {
-      timeout: DELAY_TIMEOUT
+      timeout: clientTimeout
     }).then(response => {
       if (!isDone) {
         isDone = true

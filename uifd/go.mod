@@ -3,6 +3,7 @@ module github.com/uif/uifd
 go 1.21
 
 require (
+	github.com/chengxuncc/shutdownhook v0.0.0-20210812092758-82c49b874c16
 	github.com/containers/winquit v1.1.0
 	github.com/getlantern/elevate v0.0.0-20220903142053-479ab992b264
 	github.com/getlantern/systray v1.2.2
@@ -18,7 +19,6 @@ require (
 	fyne.io/systray v1.11.0 // indirect
 	github.com/BurntSushi/toml v1.4.0 // indirect
 	github.com/ViRb3/wgcf/openapi v0.0.0-20240309103509-71e9ce8d36bc // indirect
-	github.com/chengxuncc/shutdownhook v0.0.0-20210812092758-82c49b874c16 // indirect
 	github.com/chzyer/readline v1.5.1 // indirect
 	github.com/fredbi/uri v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect

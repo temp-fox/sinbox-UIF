@@ -28,3 +28,6 @@ web_dist
 webs_dist
 web
 webs
+.deploy-build/
+*.tar.gz
+uifd/service.exe

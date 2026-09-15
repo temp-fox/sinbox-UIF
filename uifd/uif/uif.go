@@ -132,8 +132,7 @@ func SetAutoStartup(enable bool) string {
 		res.Status = 3
 		res.Res = "Macos is not supported yet."
 	} else {
-		res.Status = 3
-		res.Res = "Linux need to use 'systemd'"
+		err = AutoStartup(enable)
 	}
 	if err != nil {
 		res.Status = 2

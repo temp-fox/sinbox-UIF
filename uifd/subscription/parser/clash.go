@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,17 +41,14 @@ func clashProxy(proxy map[string]interface{}) (Node, bool) {
 		return Node{}, false
 	}
 	node := Node{Protocol: protocol, Tag: stringValue(proxy["name"]), Setting: map[string]interface{}{}}
-	node.Transport = Transport{Address: stringValue(proxy["server"]), Port: intValue(proxy["port"]), Protocol: stringValue(proxy["network"]), TLSType: "none", TLS: map[string]interface{}{}, Setting: map[string]interface{}{}}
+	node.Transport = Transport{Address: stringValue(proxy["server"]), Port: intValue(proxy["port"]), Protocol: normalizeTransportType(stringValue(proxy["network"])), TLSType: "none", TLS: map[string]interface{}{}, Setting: map[string]interface{}{}}
 	if node.Transport.Protocol == "" {
 		node.Transport.Protocol = "tcp"
 	}
-	for key, value := range proxy {
-		switch key {
-		case "name", "type", "server", "port", "network", "tls", "skip-cert-verify", "sni", "servername", "alpn", "ws-opts", "grpc-opts", "reality-opts":
-		default:
-			node.Setting[key] = value
-		}
-	}
+	// 不再用 default 分支把 clash 独有字段塞进 Setting：前端会把这些字段
+	// 原样展开成 sing-box outbound 顶层字段，sing-box 遇到 cipher/alterId/udp
+	// 等未知字段会直接启动失败（unknown field）。协议字段一律由下方 switch
+	// 显式转换为 sing-box 原生字段名。
 	if proxy["tls"] == true || protocol == "trojan" || protocol == "vmess" || protocol == "vless" || protocol == "hysteria" || protocol == "hysteria2" || protocol == "tuic" {
 		node.Transport.TLSType = "tls"
 		node.Transport.TLS["enabled"] = true
@@ -97,14 +95,67 @@ func clashProxy(proxy map[string]interface{}) (Node, bool) {
 	switch protocol {
 	case "shadowsocks":
 		node.Setting["method"], node.Setting["password"] = proxy["cipher"], proxy["password"]
+		if plugin := stringValue(proxy["plugin"]); plugin != "" {
+			node.Setting["plugin"] = plugin
+			if opts, ok := proxy["plugin-opts"].(map[string]interface{}); ok {
+				node.Setting["plugin_opts"] = cloneMap(opts)
+			}
+		}
 	case "trojan":
 		node.Setting["password"] = proxy["password"]
 	case "vmess":
 		node.Setting["uuid"], node.Setting["security"], node.Setting["alter_id"] = proxy["uuid"], proxy["cipher"], proxy["alterId"]
 	case "vless":
 		node.Setting["uuid"], node.Setting["flow"] = proxy["uuid"], proxy["flow"]
+	case "hysteria":
+		if auth := stringValue(proxy["auth-str"]); auth != "" {
+			node.Setting["auth_str"] = auth
+		} else if auth := stringValue(proxy["auth_str"]); auth != "" {
+			node.Setting["auth_str"] = auth
+		}
+		node.Setting["up_mbps"], node.Setting["down_mbps"] = clashSpeed(proxy["up"]), clashSpeed(proxy["down"])
 	case "hysteria2":
 		node.Setting["password"] = proxy["password"]
+		if obfs := stringValue(proxy["obfs"]); obfs != "" && obfs != "none" {
+			node.Setting["obfs"] = map[string]interface{}{"type": obfs, "password": stringValue(proxy["obfs-password"])}
+		}
+		node.Setting["up_mbps"], node.Setting["down_mbps"] = clashSpeed(proxy["up"]), clashSpeed(proxy["down"])
+	case "tuic":
+		node.Setting["uuid"], node.Setting["password"] = proxy["uuid"], proxy["password"]
+		if cc := stringValue(proxy["congestion-controller"]); cc != "" {
+			node.Setting["congestion_control"] = cc
+		}
+		if urm := stringValue(proxy["udp-relay-mode"]); urm != "" {
+			node.Setting["udp_relay_mode"] = urm
+		}
+		if rr, ok := proxy["reduce-rtt"].(bool); ok && rr {
+			node.Setting["zero_rtt_handshake"] = true
+		}
+	case "socks", "http":
+		if user := stringValue(proxy["username"]); user != "" {
+			node.Setting["username"] = user
+		}
+		if pass := stringValue(proxy["password"]); pass != "" {
+			node.Setting["password"] = pass
+		}
 	}
 	return node, node.Transport.Address != "" && node.Transport.Port > 0
+}
+
+// clashSpeed 把 clash 的速度字段（"50 mbps" 或数字）解析为 Mbps 整数。
+func clashSpeed(value interface{}) int {
+	switch number := value.(type) {
+	case int:
+		return number
+	case float64:
+		return int(number)
+	case string:
+		parts := strings.Fields(number)
+		if len(parts) > 0 {
+			if parsed, err := strconv.Atoi(parts[0]); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
 }

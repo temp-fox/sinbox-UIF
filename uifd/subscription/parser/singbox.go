@@ -47,7 +47,7 @@ func transportFromSing(out map[string]interface{}) Transport {
 	t.Address = stringValue(out["server"])
 	t.Port = intValue(out["server_port"])
 	if value, ok := out["transport"].(map[string]interface{}); ok {
-		t.Protocol = stringValue(value["type"])
+		t.Protocol = normalizeTransportType(stringValue(value["type"]))
 		if t.Protocol == "" {
 			t.Protocol = "tcp"
 		}
@@ -57,7 +57,21 @@ func transportFromSing(out map[string]interface{}) Transport {
 	if value, ok := out["tls"].(map[string]interface{}); ok && boolValue(value["enabled"]) {
 		t.TLSType = "tls"
 		t.TLS = cloneMap(value)
-		delete(t.TLS, "enabled")
+		// 保留 enabled，与 clash.go / v2rayn.go 及前端 uif2singbox 保持一致。
+		// 前端用 transport.tls_type != 'none' 决定是否挂 tls，但把整个 tls
+		// 对象原样写进 sing-box 配置；hysteria2/tuic/trojan 等协议强制要求
+		// tls.enabled=true，删掉会让内核以 "TLS required" 拒绝启动。
+		t.TLS["enabled"] = true
+	} else if requiresTLS(stringValue(out["type"])) {
+		// hysteria2/tuic/trojan 协议本身强制 TLS，订阅源经常省略 tls.enabled
+		// （或干脆不写 tls 字段）。若只在 tls.enabled==true 时才挂 tls，
+		// 这些节点会被标记成 tls_type=none，前端不补 tls，内核以
+		// "TLS required" 拒绝启动。这里按协议强制补上。
+		t.TLSType = "tls"
+		if value, ok := out["tls"].(map[string]interface{}); ok {
+			t.TLS = cloneMap(value)
+		}
+		t.TLS["enabled"] = true
 	}
 	if value, ok := out["multiplex"].(map[string]interface{}); ok {
 		t.Multiplex = cloneMap(value)
@@ -72,6 +86,17 @@ func mapSingProtocol(value string) string {
 	return value
 }
 
+// normalizeTransportType 把 sing-box 1.12.x 已移除的 xhttp/splithttp 传输类型
+// 归一为 httpupgrade（XHTTP 的 sing-box 原生等价物）。旧订阅快照仍可能携带
+// xhttp，若不归一，前端会把它原样写成 transport.type，导致内核解码失败。
+func normalizeTransportType(value string) string {
+	switch value {
+	case "xhttp", "splithttp":
+		return "httpupgrade"
+	}
+	return value
+}
+
 func isIgnoredOutbound(value string) bool {
 	switch value {
 	case "selector", "urltest", "direct", "block", "dns", "一线多拨":
@@ -82,6 +107,15 @@ func isIgnoredOutbound(value string) bool {
 
 func isEndpointOptional(value string) bool {
 	return value == "wireguard" || value == "http" || value == "socks"
+}
+
+// requiresTLS 返回该协议是否强制要求 TLS 传输层（即使订阅源省略 tls 字段）。
+func requiresTLS(typ string) bool {
+	switch typ {
+	case "hysteria2", "tuic", "trojan":
+		return true
+	}
+	return false
 }
 
 func cloneMap(input map[string]interface{}) map[string]interface{} {

@@ -151,7 +151,7 @@ import { v4 as uuidv4 } from "uuid";
 
 export default {
   name: "out_table",
-  props: ["outbound_list", "isSub"],
+  props: ["outbound_list", "isSub", "subscription_info"],
   components: {},
   data() {
     return {};
@@ -191,7 +191,7 @@ export default {
       this.uif.share.isOpenShare = true;
     },
     SpeedTest(index, row) {
-      uif_store.actions.TestNode([row]);
+      uif_store.actions.TestNode([row], this.subscription_info);
     },
     SpeedSort(a, b) {
       a = parseInt(a.delay);

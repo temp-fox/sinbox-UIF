@@ -16,40 +16,15 @@ import {
 
 export default function TryParse(inputData) {
   console.log(inputData)
-  try {
-    var res = V2rayN2UIF(inputData);
-    if (res.length > 0) {
-      return res
+  const text = String(inputData || "").trim();
+  const parsers = [V2rayN2UIF, UIFRaw, Sing2UIF, Clash2UIF];
+  for (const parse of parsers) {
+    try {
+      const result = parse(text);
+      if (Array.isArray(result) && result.length > 0) return result;
+    } catch (error) {
+      console.log("subscription parser failed", error);
     }
-  } catch (error) {
-    console.log("failed to parse as v2rayn", error);
-  }
-
-  try {
-    var res = UIFRaw(inputData);
-    if (res.length > 0) {
-      return res
-    }
-  } catch (error) {
-    console.log("failed to parse as uif", error);
-  }
-
-  try {
-    var res = Clash2UIF(inputData);
-    if (res.length > 0) {
-      return res
-    }
-  } catch (error) {
-    console.log("failed to parse as clash: ", error);
-  }
-
-  try {
-    var res = Sing2UIF(inputData);
-    if (res.length > 0) {
-      return res
-    }
-  } catch (error) {
-    console.log("failed to parse as sb", error);
   }
   return [];
 }

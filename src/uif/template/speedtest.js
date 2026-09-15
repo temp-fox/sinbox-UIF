@@ -1,15 +1,19 @@
 import {
   DeepCopy
-} from '@/utils'
+} from '@/store/uif/parser/utils.js'
 
 import {
   Outbound
 } from '@/store/uif/parser/uif2singbox.js'
 import {
-  DEFAULT_IP_DNS
-} from './tun_fakeip'
+  resolveNodeDetour,
+  addTestOutbound
+} from '@/store/uif/parser/test_detour.js'
 
-import uif from '@/store/uif/uif'
+// 测速临时配置的 DNS 上游。保持与运行时的 DEFAULT_REMOTE_IP_DNS 一致
+// (udp://8.8.8.8)，但不 import tun_fakeip.js —— 它会级联 import 全局 uif store，
+// 在 jest 环境下触发 Init()→Connect() 的 Cookies 副作用，导致模板无法单测。
+const TEST_DNS = 'udp://8.8.8.8'
 
 export var MutipleTemplate = {
   "experimental": {
@@ -20,7 +24,7 @@ export var MutipleTemplate = {
   "dns": {
     "servers": [{
       "tag": "dns_direct",
-      "address": DEFAULT_IP_DNS,
+      "address": TEST_DNS,
       "detour": "freedom"
     }],
     "independent_cache": true
@@ -34,7 +38,7 @@ export var MutipleTemplate = {
   }
 }
 
-export function BuildTestNodeTemplate(uifStyleNodeConfig, isAddHttpInbound) {
+export function BuildTestNodeTemplate(uifStyleNodeConfig, isAddHttpInbound, resolveDetour) {
   var res = DeepCopy(MutipleTemplate)
 
   if (isAddHttpInbound) {
@@ -46,26 +50,20 @@ export function BuildTestNodeTemplate(uifStyleNodeConfig, isAddHttpInbound) {
     })
   }
 
-  res['dns']['servers'][0]['address'] = DEFAULT_IP_DNS
+  res['dns']['servers'][0]['address'] = TEST_DNS
   res['endpoints'] = []
+  var addedDetours = {}
   for (var item in uifStyleNodeConfig) {
     var out = Outbound(uifStyleNodeConfig[item])
-    if ('detour' in out) {
+    // 链式代理：把前置节点一并加入测试配置，被测节点 detour 指向前置节点，
+    // 使测速真正经过前置代理，而不是直连绕过。
+    var detourTag = resolveNodeDetour(uifStyleNodeConfig[item], res, addedDetours, resolveDetour)
+    if (detourTag) {
+      out['detour'] = detourTag
+    } else {
       delete out['detour']
     }
-    if (out['type'] == 'wireguard') {
-      var tag = out['tag']
-      var epTag = tag + '-ep'
-      out['tag'] = epTag
-      res['endpoints'].push(out)
-      res['outbounds'].push({
-        'type': 'direct',
-        'tag': tag,
-        'detour': epTag
-      });
-    } else {
-      res['outbounds'].push(out)
-    }
+    addTestOutbound(res, out)
 
     if (isAddHttpInbound) {
       res['route']['final'] = out['tag']

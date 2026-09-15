@@ -29,14 +29,33 @@ describe('subscription state management', () => {
     expect(next[0].transport.address).toBe('new.example')
   })
 
-  it('applies threshold and protects minimum keep count', () => {
+  it('marks slow successes without quarantining usable nodes', () => {
     const nodes = [
-      { enabled: true, quarantined: false, consecutive_failures: 0 },
+      { enabled: true, quarantined: false, consecutive_failures: 2 },
       { enabled: true, quarantined: false, consecutive_failures: 0 },
     ]
     applyProbeResult(nodes, 0, { success: true, delay: 500 }, {
       threshold_ms: 200, max_consecutive_failures: 1, failure_action: 'delete', min_keep: 1,
     })
+    expect(nodes[0].delay).toBe('500')
+    expect(nodes[0].last_probe_status).toBe('slow')
+    expect(nodes[0].consecutive_failures).toBe(0)
+    expect(nodes[0].quarantined).toBe(false)
+    expect(nodes[0].enabled).toBe(true)
+    expect(nodes[1].enabled).toBe(true)
+  })
+
+  it('quarantines only real probe failures and keeps the error message', () => {
+    const nodes = [
+      { enabled: true, quarantined: false, consecutive_failures: 0 },
+      { enabled: true, quarantined: false, consecutive_failures: 0 },
+    ]
+    applyProbeResult(nodes, 0, { success: false, delay: -1, msg: 'delay HTTP status: 504 Gateway Timeout' }, {
+      threshold_ms: 200, max_consecutive_failures: 1, failure_action: 'delete', min_keep: 1,
+    })
+    expect(nodes[0].delay).toBe('-1')
+    expect(nodes[0].last_probe_status).toBe('failed')
+    expect(nodes[0].probe_error).toContain('504')
     expect(nodes[0].quarantined).toBe(true)
     expect(nodes[0].enabled).toBe(false)
     expect(nodes[1].enabled).toBe(true)

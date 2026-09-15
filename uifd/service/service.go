@@ -833,6 +833,11 @@ func Service(w http.ResponseWriter, r *http.Request) {
 						spec.SnapshotPath = snapshotPath
 					}
 				}
+				// 手动刷新（添加/更新订阅）必须快速返回：逐节点探活对数百个节点
+				// 可能耗时数分钟（节点不可达时逐个超时，实测 324 节点耗时 168 秒），
+				// 会让前端 RunSubscriptionJob 的 60 秒轮询超时，表现为"一直转圈"。
+				// 探活是周期调度/后台任务职责，不应阻塞订阅的 fetch+parse+save。
+				spec.Probe.Enabled = false
 				job := subscriptionScheduler.RunNowSpec(spec)
 				if job == nil {
 					res = `{"status":-1,"error":"subscription scheduler is not ready"}`

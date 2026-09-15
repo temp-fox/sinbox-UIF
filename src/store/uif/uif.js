@@ -28,6 +28,7 @@ import {
   validateEnabledInbounds,
 } from "./parser/inbound_validation";
 import { mergeSubscriptionNodes, applyProbeResult, normalizeSubscriptions } from "./parser/subscription";
+import { InheritSubscriptionDetour } from "./parser/subscription_detour";
 
 var subscriptionTimer = null;
 var subscriptionJobs = {};
@@ -54,6 +55,7 @@ import {
   newDefaultHttpIn,
   newDefaultTunIn,
   newSub,
+  FindOutByID,
 } from "./config";
 
 import TryParse from "@/store/uif/parser";
@@ -61,6 +63,11 @@ import TryParse from "@/store/uif/parser";
 import {
   BuildTestNodeTemplate
 } from "@/uif/template/speedtest";
+
+import {
+  SUBSCRIPTION_SELECTOR_PREFIX,
+  subscriptionOutboundTag,
+} from "@/store/uif/parser/route_target";
 
 import {
   getToken
@@ -416,7 +423,7 @@ function UpdateInfo(res) {
 function StartSubscriptionScheduler() {
   // Refreshes are owned by the backend scheduler so manual and periodic jobs
   // share one task registry and /subscriptions/tasks status.
-  normalizeSubscriptionIDs(configObj.state.config.subscribe || []);
+  normalizeSubscriptions(configObj.state.config.subscribe || []);
 }
 
 function StopSubscriptionScheduler() {
@@ -428,16 +435,70 @@ async function heartBeat() {
     try {
       var res = await MyPost(state.apiAddress + "/connect", {});
       if ("status" in res.data) {
-        ConnectErrorMsg("后端连接已断开！密码错误", 0);
-        return;
+        console.warn("UIF authentication status returned by /connect");
+        state.connection.isConnecting = false;
+      } else {
+        UpdateInfo(res);
       }
-      UpdateInfo(res);
     } catch (e) {
-      console.log(e);
-      ConnectErrorMsg("后端连接已断开！", 0);
+      // A transient heartbeat timeout must not tear down the management
+      // session. Clash API health is independent from the UIF API session.
+      console.warn("UIF heartbeat failed", e);
     }
   }
   setTimeout(heartBeat, CLOCK_INTERNAL);
+}
+
+function findClashNodeStateByName(name) {
+  if (!name) return null;
+  var lists = [state.clashProxies.show || [], state.clashProxies.all || []];
+  for (var l = 0; l < lists.length; l++) {
+    for (var i = 0; i < lists[l].length; i++) {
+      var item = lists[l][i];
+      if (item && item.name === name) {
+        return item;
+      }
+    }
+  }
+  return null;
+}
+
+function sourceProbeStateByClashName(name) {
+  var source = findProbeSourceByClashName(name);
+  if (!source || !source.node) return null;
+  if (source.node.last_probe_status === undefined && source.node.delay === undefined) {
+    return null;
+  }
+  return source.node;
+}
+
+function applySavedDelayState(clashNode) {
+  if (!clashNode) return;
+  var cached = findClashNodeStateByName(clashNode.name);
+  var source = sourceProbeStateByClashName(clashNode.name);
+  var hasHistory = "history" in clashNode && clashNode["history"].length > 0 && "delay" in clashNode["history"][0];
+
+  clashNode.isTestingDelay = cached ? !!cached.isTestingDelay : false;
+  if (hasHistory) {
+    clashNode.delay = clashNode["history"][0]["delay"];
+  } else {
+    clashNode.delay = "";
+  }
+
+  if (cached && cached.isTestingDelay) {
+    clashNode.delay = cached.delay !== undefined ? cached.delay : " ";
+  }
+  if (source) {
+    if (source.delay !== undefined) clashNode.delay = source.delay;
+    if (source.last_probe_delay_ms !== undefined) clashNode.last_probe_delay_ms = source.last_probe_delay_ms;
+    if (source.last_probe_status !== undefined) clashNode.last_probe_status = source.last_probe_status;
+    if (source.probe_error !== undefined) clashNode.probe_error = source.probe_error;
+  } else if (cached) {
+    if (cached.delay !== undefined && cached.delay !== -1 && cached.delay !== "-1") clashNode.delay = cached.delay;
+    if (cached.last_probe_delay_ms !== undefined) clashNode.last_probe_delay_ms = cached.last_probe_delay_ms;
+    if (cached.last_probe_status !== undefined) clashNode.last_probe_status = cached.last_probe_status;
+    if (cached.probe_error !== undefined) clashNode.probe_error = cached.probe_error;
+  }
 }
 
 function UpdateClashNode() {
@@ -465,15 +526,7 @@ function UpdateClashNode() {
           continue;
         }
         var item = r.data["proxies"][item];
-        item.isTestingDelay = false;
-        item.delay = -1;
-        if (
-          "history" in item &&
-          item["history"].length > 0 &&
-          "delay" in item["history"][0]
-        ) {
-          item.delay = item["history"][0]["delay"];
-        }
+        applySavedDelayState(item);
 
         if (type == "urltest") {
           urlTest = item;
@@ -496,7 +549,7 @@ function ClashConnection() {
 
   UpdateSubExtraInfo();
 
-  if (!state.config.simplified.enabled) {
+  if (state.connection.isConnected && !state.connection.isConnecting) {
     DoClashReqeust("/connections", "GET", {}).then(function (r) {
       if (!state.clashConnection) {
         state.clashConnection = r.data;
@@ -561,7 +614,7 @@ function ClashConnection() {
   UpdateClashNode();
 }
 
-function DoClashReqeust(path, method, data) {
+function DoClashReqeust(path, method, data, clientTimeoutMs) {
   if (method == "") {
     method = "GET";
   }
@@ -572,12 +625,16 @@ function DoClashReqeust(path, method, data) {
         encodeURIComponent(item) + "=" + encodeURIComponent(data[item]) + "&";
     }
   }
-  return MyPost(state.apiAddress + "/http_with_port", {
+  var payload = {
     dst: state.config.clash.apiAddress + path,
     method: method,
     data: data,
     authorization: state.config.clash.apiKey,
-  });
+  };
+  if (clientTimeoutMs) {
+    payload.__client_timeout_ms = clientTimeoutMs;
+  }
+  return MyPost(state.apiAddress + "/http_with_port", payload);
 }
 
 async function ClashChangeProxy() {
@@ -589,63 +646,181 @@ async function ClashChangeProxy() {
   await DoClashReqeust("cache/dns/flush", "POST", {})
 }
 
-function UpdateClashDelay(node, url) {
-  var ipv6 = "https://ipv6.google.com";
+function clashDelayTimeoutMs() {
+  var subs = configObj.state.config.subscribe || [];
+  var maxTimeout = 10000;
+  for (var i = 0; i < subs.length; i++) {
+    var value = Number(subs[i] && subs[i].probe && subs[i].probe.timeout_ms);
+    if (Number.isFinite(value) && value > maxTimeout) {
+      maxTimeout = value;
+    }
+  }
+  return Math.max(3000, Math.min(120000, Math.floor(maxTimeout)));
+}
+
+function findProbeSourceByClashName(name) {
+  if (!name) return null;
+  var config = configObj.state.config || {};
+  for (var i = 0; i < (config.outbounds || []).length; i++) {
+    var outbound = config.outbounds[i];
+    if (outbound && (outbound.core_tag === name || outbound.tag === name)) {
+      return { node: outbound, subscription: null };
+    }
+  }
+  for (var s = 0; s < (config.subscribe || []).length; s++) {
+    var sub = config.subscribe[s];
+    var nodes = (sub && sub.outbounds) || [];
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      if (node && (node.core_tag === name || node.tag === name)) {
+        return { node: node, subscription: sub };
+      }
+    }
+  }
+  return null;
+}
+
+function effectiveProbeDetourId(node, subscription) {
+  var nodeIds = node && node.dial && node.dial.detour && node.dial.detour.id;
+  if (Array.isArray(nodeIds) && nodeIds.length > 0) {
+    return nodeIds[nodeIds.length - 1] || '';
+  }
+  var subIds = subscription && subscription.dial && subscription.dial.detour && subscription.dial.detour.id;
+  if (Array.isArray(subIds) && subIds.length > 0) {
+    return subIds[subIds.length - 1] || '';
+  }
+  return '';
+}
+
+function probeGroupKey(source) {
+  var subId = source.subscription && source.subscription.id ? source.subscription.id : 'standalone';
+  return subId + '::' + effectiveProbeDetourId(source.node, source.subscription);
+}
+
+function mirrorProbeResultToClashNode(clashNode, sourceNode) {
+  if (!clashNode || !sourceNode) return;
+  if (sourceNode.delay !== undefined) clashNode.delay = sourceNode.delay;
+  if (sourceNode.last_probe_delay_ms !== undefined) clashNode.last_probe_delay_ms = sourceNode.last_probe_delay_ms;
+  if (sourceNode.last_probe_status !== undefined) clashNode.last_probe_status = sourceNode.last_probe_status;
+  if (sourceNode.probe_error !== undefined) clashNode.probe_error = sourceNode.probe_error;
+  if (sourceNode.delay !== ' ') clashNode.isTestingDelay = false;
+  for (var item in state.clashProxies.all) {
+    var target = state.clashProxies.all[item];
+    if (target && target.name === clashNode.name) {
+      if (sourceNode.delay !== undefined) target.delay = sourceNode.delay;
+      if (sourceNode.last_probe_delay_ms !== undefined) target.last_probe_delay_ms = sourceNode.last_probe_delay_ms;
+      if (sourceNode.last_probe_status !== undefined) target.last_probe_status = sourceNode.last_probe_status;
+      if (sourceNode.probe_error !== undefined) target.probe_error = sourceNode.probe_error;
+      if (sourceNode.delay !== ' ') target.isTestingDelay = false;
+      break;
+    }
+  }
+}
+
+function updateClashUpdatingFlag() {
+  var stillTesting = state.clashProxies.show.some(function (item) {
+    return item && item.isTestingDelay;
+  });
+  state.clashProxies.isUpdatingDelay = stillTesting;
+}
+
+function updateClashDelayFallback(node, url) {
+  var timeout = clashDelayTimeoutMs();
   var params = {
     url: url,
-    timeout: 10000,
+    timeout: timeout,
   };
   node["isTestingDelay"] = true;
-  DoClashReqeust(
+  state.clashProxies.isUpdatingDelay = true;
+  return DoClashReqeust(
     "/proxies/" + encodeURIComponent(node["name"]) + "/delay",
     "GET",
     params,
+    timeout + 20000,
   )
     .then(function (response) {
-      state.clashProxies.isUpdatingDelay = true;
-      for (var item in state.clashProxies.all) {
-        var item = state.clashProxies.all[item];
-        if (item["name"] == node["name"]) {
-          item["delay"] = response.data["delay"];
-          break;
-        }
-      }
+      var delay = Number(response.data && response.data["delay"]);
+      node["delay"] = Number.isFinite(delay) && delay > 0 ? delay : -1;
       node["isTestingDelay"] = false;
-      state.clashProxies.isUpdatingDelay = false;
+      return node["delay"];
     })
     .catch((error) => {
       node["delay"] = -1;
       node["isTestingDelay"] = false;
-    });
+      throw error;
+    })
+    .finally(updateClashUpdatingFlag);
 }
 
-function UpdateClashGroupDelay(url) {
-  var ipv6 = "https://ipv6.google.com";
-  var params = {
-    url: url,
-    timeout: 10000,
-  };
-  var nodes = state.clashProxies.show;
-  for (var item in nodes) {
-    var item = nodes[item];
-    item["isTestingDelay"] = true;
-    item["delay"] = -1;
+async function UpdateClashDelay(node, url) {
+  var source = findProbeSourceByClashName(node && node.name);
+  if (!source) {
+    return updateClashDelayFallback(node, url);
   }
-  DoClashReqeust("/group/proxy/delay", "GET", params)
-    .then(function (response) {
-      state.clashProxies.isUpdatingDelay = true;
-      for (var item in nodes) {
-        var item = nodes[item];
-        if (item["name"] in response.data) {
-          item["delay"] = response.data[item["name"]];
-        }
-        item["isTestingDelay"] = false;
+  node.isTestingDelay = true;
+  state.clashProxies.isUpdatingDelay = true;
+  await TestNode([source.node], source.subscription);
+  mirrorProbeResultToClashNode(node, source.node);
+  updateClashUpdatingFlag();
+  return source.node.delay;
+}
+
+async function UpdateClashGroupDelay(url) {
+  var clashNodes = state.clashProxies.show.filter(function (item) {
+    return item && item["name"] && item["type"] !== "URLTest";
+  });
+  var groups = {};
+  var groupList = [];
+  var fallbackNodes = [];
+  state.clashProxies.isUpdatingDelay = true;
+
+  for (var i = 0; i < clashNodes.length; i++) {
+    var clashNode = clashNodes[i];
+    var source = findProbeSourceByClashName(clashNode.name);
+    if (!source) {
+      fallbackNodes.push(clashNode);
+      continue;
+    }
+    var key = probeGroupKey(source);
+    if (!groups[key]) {
+      groups[key] = { subscription: source.subscription, sourceNodes: [], clashNodes: [] };
+      groupList.push(groups[key]);
+    }
+    groups[key].sourceNodes.push(source.node);
+    groups[key].clashNodes.push(clashNode);
+    clashNode.isTestingDelay = true;
+  }
+
+  // 已能映射回 UIF 配置的节点一律走同一套链式测速逻辑：订阅级前置继承、
+  // 前置订阅先测速选最快、目标节点再按 probe.concurrency（上限 5）分批测速。
+  for (var g = 0; g < groupList.length; g++) {
+    var group = groupList[g];
+    await TestNode(group.sourceNodes, group.subscription);
+    for (var n = 0; n < group.sourceNodes.length; n++) {
+      mirrorProbeResultToClashNode(group.clashNodes[n], group.sourceNodes[n]);
+    }
+  }
+
+  // 只对映射不到 UIF 源节点的 Clash 临时项使用兼容 fallback。
+  var limit = 5;
+  var cursor = 0;
+  async function worker() {
+    while (cursor < fallbackNodes.length) {
+      var index = cursor;
+      cursor += 1;
+      try {
+        await updateClashDelayFallback(fallbackNodes[index], url);
+      } catch (error) {
+        console.warn("Clash node delay failed", fallbackNodes[index] && fallbackNodes[index].name, error);
       }
-      state.clashProxies.isUpdatingDelay = false;
-    })
-    .catch((error) => {
-      state.clashProxies.isUpdatingDelay = false;
-    });
+    }
+  }
+  var workers = [];
+  for (var w = 0; w < Math.min(limit, fallbackNodes.length); w++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
+  updateClashUpdatingFlag();
 }
 
 function SortClashProxyNode() {
@@ -796,7 +971,19 @@ function GetUIFConfig() {
       }
       state.config = InitSetting(res.data.uif, state.config);
       if (res.data.data != undefined) {
-        configObj.state.config = res.data.data;
+        const savedConfig = configObj.state.config;
+        const savedSubscriptions = savedConfig.subscribe || [];
+        const loadedConfig = res.data.data;
+        const loadedSubscriptions = loadedConfig.subscribe || [];
+        const mergedSubscriptions = [...loadedSubscriptions];
+        for (const local of savedSubscriptions) {
+          const exists = mergedSubscriptions.some((remote) =>
+            (remote.id && local.id && remote.id === local.id) ||
+            (remote.data && local.data && remote.data === local.data),
+          );
+          if (!exists) mergedSubscriptions.push(local);
+        }
+        configObj.state.config = { ...loadedConfig, subscribe: mergedSubscriptions };
         if (normalizeSubscriptions(configObj.state.config.subscribe || [])) {
           SaveUIFConfig();
         }
@@ -908,7 +1095,7 @@ function ApplyCoreConfig() {
 // save and apply UIF config, then apply this config to core config.
 function SaveUIFConfig() {
   if (!state.connection.isConnected) {
-    return;
+    return Promise.reject(new Error("UIF 后端未连接"));
   }
   var shareConfig = {};
   try {
@@ -917,7 +1104,7 @@ function SaveUIFConfig() {
     console.log(e);
   }
 
-  MyPost(state.apiAddress + "/save_uif_config", {
+  return MyPost(state.apiAddress + "/save_uif_config", {
     config: {
       uif: state.config,
       data: configObj.state.config,
@@ -941,6 +1128,7 @@ function SaveUIFConfig() {
       Message.error({
         message: "Config save failed: " + error,
       });
+      throw error;
     });
 }
 
@@ -1042,7 +1230,7 @@ function Connect() {
   } catch (e) {
     return;
   }
-  state.apiAddress = url.origin;
+  state.apiAddress = ResolveAPIAddress(url.origin);
 
   state.connection.isConnecting = true;
   SetKey(state.password);
@@ -1202,19 +1390,61 @@ async function RunSubscriptionJob(sub) {
     const current = status.data;
     if (current.status === -1) throw new Error(current.error || "订阅任务不存在");
     if (current.state === "success") {
-    try {
-      const envelope = JSON.parse(current.result || "{}");
-      if (envelope.body !== undefined) {
-        return { body: envelope.body, extraInfo: envelope.extra_info || "" };
+      try {
+        const envelope = typeof current.result === "string"
+          ? JSON.parse(current.result || "{}")
+          : (current.result || {});
+        if (envelope.body !== undefined) {
+          return { body: String(envelope.body), extraInfo: envelope.extra_info || "", nodes: envelope.nodes || [] };
+        }
+      } catch (error) {
+        console.warn("subscription result envelope parse failed", error);
       }
-    } catch (error) {
-      console.warn("subscription result envelope parse failed", error);
+      const fallbackBody = typeof current.result === "string" ? current.result : "";
+      return { body: fallbackBody, extraInfo: "" };
     }
-    return { body: current.result || "", extraInfo: "" };
-  }
     if (["failed", "cancelled"].includes(current.state)) throw new Error(current.error || "订阅任务失败");
   }
   throw new Error("订阅任务超时");
+}
+
+// 将后端/前端解析出的原始节点统一补齐运行时字段，并强制使用前端
+// nodeFingerprint（fnv1a）作为身份，避免后端 sha256 指纹与旧节点不匹配。
+// 后端 Go 的 Transport.Setting/TLS/Multiplex 带 omitempty，空 map 会被省略，
+// 这里补全 transport 结构，避免 BuildCoreConfig 时访问 undefined 崩溃。
+function prepareParsedNodes(nodes) {
+  return (nodes || []).map(function (node) {
+    var copy = DeepCopy(node || {});
+    delete copy.fingerprint;
+    copy.enabled = false;
+    copy.delay = "";
+    copy.core_tag = "";
+    copy.id = uuidv4();
+    if (!copy.setting || typeof copy.setting !== "object") {
+      copy.setting = {};
+    }
+    var transport = copy.transport;
+    if (!transport || typeof transport !== "object") {
+      transport = { protocol: "tcp", tls_type: "none", address: "", port: 0 };
+      copy.transport = transport;
+    }
+    if (!transport.setting || typeof transport.setting !== "object") {
+      transport.setting = {};
+    }
+    if (!transport.tls || typeof transport.tls !== "object") {
+      transport.tls = {};
+    }
+    if (!transport.multiplex || typeof transport.multiplex !== "object") {
+      transport.multiplex = {};
+    }
+    if (!transport.protocol) {
+      transport.protocol = "tcp";
+    }
+    if (!transport.tls_type) {
+      transport.tls_type = "none";
+    }
+    return copy;
+  });
 }
 
 async function UpdateSub2(info, isUpdatingExtraData) {
@@ -1231,25 +1461,29 @@ async function UpdateSub2(info, isUpdatingExtraData) {
     return;
   }
 
-  if (state.connection.coreStatus != 0) {
-    Message.error({
-      message: Translator({
-        cn: "内核未运行，无法拉取数据！请到主页查看更多信息",
-        en: "Core is not running, can not pull data.",
-      }),
-    });
-    return;
-  }
-
+  // 订阅拉取/解析是纯后端操作（fetch + parse + snapshot），不依赖 sing-box
+  // 内核是否运行。内核状态只影响“应用配置到内核”，不能阻断订阅更新，
+  // 否则内核起不来时用户连订阅都无法添加/更新。
   var rawData = info.data;
   const previousUpdateTime = info.updateTime;
   const previousExtra = DeepCopy(info.extra || {});
   if (info.type == "link") {
+    let res = { data: { status: 0, res: rawData }, headers: {} };
     try {
-      let res = { data: { status: 0, res: rawData }, headers: {} };
       let fetched = await RunSubscriptionJob(info);
       rawData = fetched.body || fetched;
       if (fetched.extraInfo) res.headers["extra-info"] = fetched.extraInfo;
+      if (fetched.nodes && fetched.nodes.length > 0) {
+        info.outbounds = mergeSubscriptionNodes(
+          info.outbounds || [],
+          prepareParsedNodes(fetched.nodes),
+          info.policy && info.policy.update_mode === "replace" ? "replace" : "merge",
+        );
+        info.updateTime = moment().valueOf();
+        info.last_update_status = "success";
+        info.last_update_error = "";
+        return true;
+      }
     } catch (error) {
       console.log(error);
       Message.error({
@@ -1287,7 +1521,7 @@ async function UpdateSub2(info, isUpdatingExtraData) {
     return;
   }
 
-  var outList = TryParse(rawData);
+  var outList = rawData ? TryParse(rawData) : (info.outbounds || []);
   if (outList.length == 0) {
     info.updateTime = previousUpdateTime;
     info.last_update_status = "failed";
@@ -1415,57 +1649,285 @@ async function InstallAutoStartup() {
   return true;
 }
 
-function TestNode(uifStyleNodeConfig) {
-  if (!state.connection.isConnected) {
-    return;
+// 测速用的前置代理解析器：根据 dial.detour.id 最后一项返回完整信息。
+// 具体节点 id -> { kind: 'node', outbound }
+// "subscription:<id>" -> { kind: 'subscription', subscriptionId, nodes, groupTag, urlTest }
+function resolveTestDetour(id) {
+  if (typeof id === 'string' && id.indexOf(SUBSCRIPTION_SELECTOR_PREFIX) === 0) {
+    var subId = id.slice(SUBSCRIPTION_SELECTOR_PREFIX.length)
+    var sub = null
+    var subs = configObj.state.config.subscribe || []
+    for (var s = 0; s < subs.length; s++) {
+      if (subs[s] && subs[s].id === subId) {
+        sub = subs[s]
+        break
+      }
+    }
+    if (!sub) {
+      return null
+    }
+    var urlTest = state.config.urlTest || {}
+    var interval = urlTest.interval + "m"
+    return {
+      kind: 'subscription',
+      subscriptionId: subId,
+      nodes: sub.outbounds || [],
+      groupTag: subscriptionOutboundTag(subId),
+      urlTest: {
+        url: urlTest.testURL,
+        interval: interval,
+        idle_timeout: interval,
+        tolerance: parseInt(urlTest.tolerance),
+      },
+      probe: sub.probe || {},
+    }
   }
-  for (var item in uifStyleNodeConfig) {
-    uifStyleNodeConfig[item]["delay"] = " ";
+  var pre = FindOutByID(id)
+  if (!pre) {
+    return null
   }
+  return { kind: 'node', outbound: pre }
+}
 
+function buildDelayConfigAndTags(nodes, resolveDetour) {
   var tags = [];
+  var config = BuildTestNodeTemplate(nodes, false, resolveDetour);
   var i = 0;
-  var config = BuildTestNodeTemplate(uifStyleNodeConfig, false);
   for (var item in config["outbounds"]) {
     if (item == 0) {
       continue;
     }
     item = config["outbounds"][item];
+    // 前置转发节点（tag 前缀 detour:）及订阅 urltest 组保持 tag 供被测节点
+    // detour 引用，不参与延迟上报。
+    if ((item["tag"] || "").indexOf("detour:") === 0) {
+      continue;
+    }
+    if (item["type"] === "urltest") {
+      continue;
+    }
     item["tag"] = i.toString();
     tags.push(i.toString());
     i += 1;
   }
+  return { config: config, tags: tags };
+}
 
-  setTimeout(function () {
-    for (var item in uifStyleNodeConfig) {
-      if (uifStyleNodeConfig[item]["delay"] == " ") {
-        uifStyleNodeConfig[item]["delay"] = "-1";
-      }
-    }
-  }, DELAY_TIMEOUT);
+function probeTimeoutMs(policy) {
+  var value = Number(policy && policy.timeout_ms || DELAY_TIMEOUT);
+  if (!Number.isFinite(value) || value <= 0) {
+    return DELAY_TIMEOUT;
+  }
+  return Math.max(3000, Math.min(120000, Math.floor(value)));
+}
 
-  MyWS(
-    state.apiAddress + "/delay", {
-    config: JSON.stringify(config),
-    tags: tags,
-  },
-    function (response) {
-      console.log(response);
+function runDelayBatch(nodes, resolveDetour, policy, resultNodes, offset) {
+  if (!state.connection.isConnected || nodes.length === 0) {
+    return Promise.resolve([]);
+  }
+  var built = buildDelayConfigAndTags(nodes, resolveDetour);
+  if (built.tags.length === 0) {
+    return Promise.resolve([]);
+  }
+  return new Promise(function (resolve) {
+    var results = [];
+    var done = false;
+    var timeoutMs = probeTimeoutMs(policy || {});
+    var url = new URL(state.apiAddress + "/delay");
+    var wsURL = `${url.protocol == 'https:' ? 'wss' : 'ws'}://${url.host}${url.pathname}?key=${encodeURIComponent(GetKey())}`;
+    var socket = new WebSocket(wsURL);
+    // 这里不能用前端短超时把未返回的节点批量判定为 -1。
+    // 后端会等临时 sing-box Clash API 就绪，并按 timeout_ms 返回每个 tag 的真实结果；
+    // 前端只负责接收后端结果。兜底只防止连接永久挂死，不写入任何节点失败状态。
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      try { socket.close(); } catch (e) {}
+      Message.warning({ message: "测速连接等待过久，未返回的节点保持测速中状态。" });
+      resolve(results);
+    }, 30 * 60 * 1000);
+
+    socket.onopen = function () {
+      socket.send(JSON.stringify({
+        config: JSON.stringify(built.config),
+        tags: built.tags,
+        timeout_ms: timeoutMs,
+      }));
+    };
+
+    socket.onmessage = function (response) {
       var data = JSON.parse(response.data);
-      var i = parseInt(data["tag"]);
-      var item = uifStyleNodeConfig[i];
-      if (data["status"] == 0 && data["delay"] != 0) {
-        applyProbeResult(uifStyleNodeConfig, i, { success: true, delay: data["delay"] }, state.subscribe.info.probe || {});
-      } else {
-        applyProbeResult(uifStyleNodeConfig, i, { success: false, delay: -1 }, state.subscribe.info.probe || {});
+      var index = parseInt(data["tag"]);
+      var globalIndex = Number(offset || 0) + index;
+      var success = data["status"] == 0 && data["delay"] != 0;
+      applyProbeResult(resultNodes || nodes, globalIndex, {
+        success: success,
+        delay: success ? data["delay"] : -1,
+        msg: data["msg"] || "",
+      }, policy || {});
+      results.push({ index: index, success: success, delay: success ? Number(data["delay"]) : -1, data: data });
+      if (results.length >= built.tags.length && !done) {
+        done = true;
+        clearTimeout(timer);
+        try { socket.close(); } catch (e) {}
+        resolve(results);
       }
-    },
-    function (error) {
-      Message.error({
-        message: "Failed: " + error,
-      });
-    },
-  );
+    };
+
+    socket.onerror = function () {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch (e) {}
+      Message.error({ message: "测速连接异常，未返回的节点保持测速中状态。" });
+      resolve(results);
+    };
+
+    socket.onclose = function () {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      Message.warning({ message: "测速连接已关闭，未返回的节点保持测速中状态。" });
+      resolve(results);
+    };
+  });
+}
+
+function chunkNodes(nodes, size) {
+  var chunks = [];
+  for (var i = 0; i < nodes.length; i += size) {
+    chunks.push(nodes.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function probeConcurrency(policy) {
+  var value = Number(policy && policy.concurrency || 4);
+  if (!Number.isFinite(value) || value <= 0) {
+    return 4;
+  }
+  return Math.max(1, Math.min(5, Math.floor(value)));
+}
+
+async function runDelayInOrder(nodes, resolveDetour, policy) {
+  var chunks = chunkNodes(nodes, probeConcurrency(policy));
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    await runDelayBatch(chunks[i], resolveDetour, policy, nodes, offset);
+    offset += chunks[i].length;
+  }
+}
+
+function fastestHealthyNode(nodes) {
+  var best = null;
+  var bestDelay = 0;
+  for (var i = 0; i < nodes.length; i++) {
+    var node = nodes[i];
+    if (!node || !node.enabled || node.quarantined) {
+      continue;
+    }
+    var delay = Number(node.last_probe_delay_ms || node.delay || -1);
+    if (!Number.isFinite(delay) || delay <= 0) {
+      continue;
+    }
+    if (best == null || delay < bestDelay) {
+      best = node;
+      bestDelay = delay;
+    }
+  }
+  return best;
+}
+
+function cloneNodesWithSubscriptionDetour(nodes, subscriptionInfo) {
+  var cloned = DeepCopy(nodes);
+  if (subscriptionInfo) {
+    for (var i = 0; i < cloned.length; i++) {
+      InheritSubscriptionDetour(cloned[i], subscriptionInfo);
+    }
+  }
+  return cloned;
+}
+
+function firstDetourId(nodes) {
+  for (var i = 0; i < nodes.length; i++) {
+    var ids = nodes[i] && nodes[i].dial && nodes[i].dial.detour && nodes[i].dial.detour.id;
+    if (Array.isArray(ids) && ids.length > 0) {
+      return ids[ids.length - 1];
+    }
+  }
+  return '';
+}
+
+function hasPendingProbe(nodes) {
+  for (var item in nodes) {
+    if (nodes[item] && nodes[item]["delay"] == " ") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function markProbeStarted(nodes) {
+  for (var item in nodes) {
+    if (nodes[item] && nodes[item]["enabled"] && !nodes[item]["quarantined"]) {
+      nodes[item]["delay"] = " ";
+    }
+  }
+}
+
+async function TestNode(uifStyleNodeConfig, subscriptionInfo) {
+  if (!state.connection.isConnected) {
+    return;
+  }
+  markProbeStarted(uifStyleNodeConfig);
+
+  var policy = (subscriptionInfo && subscriptionInfo.probe) || state.subscribe.info.probe || {};
+  var testNodes = cloneNodesWithSubscriptionDetour(uifStyleNodeConfig, subscriptionInfo);
+  var detourId = firstDetourId(testNodes);
+  var chainedResolveDetour = resolveTestDetour;
+
+  // 前置是「订阅自动选优」时，先测前置订阅，选最快可用节点，
+  // 再把该具体节点作为前置去测当前订阅，避免 urltest 组并发竞态导致全 -1。
+  var detourInfo = resolveTestDetour(detourId);
+  if (detourInfo && detourInfo.kind === 'subscription') {
+    await runDelayInOrder(detourInfo.nodes || [], null, detourInfo.probe || policy);
+    var fastest = fastestHealthyNode(detourInfo.nodes || []);
+    if (!fastest) {
+      if (hasPendingProbe(detourInfo.nodes || [])) {
+        Message.warning({ message: "前置订阅还有节点未返回，当前订阅暂不判定失败。" });
+      } else {
+        Message.error({ message: "前置订阅没有可用节点，链式测速失败。" });
+      }
+      return;
+    }
+    chainedResolveDetour = function (id) {
+      if (id === detourId) {
+        return { kind: 'node', outbound: fastest };
+      }
+      return resolveTestDetour(id);
+    };
+  } else if (detourInfo && detourInfo.kind === 'node') {
+    await runDelayInOrder([detourInfo.outbound], null, policy);
+    var preDelay = Number(detourInfo.outbound.last_probe_delay_ms || detourInfo.outbound.delay || -1);
+    if (!Number.isFinite(preDelay) || preDelay <= 0) {
+      if (detourInfo.outbound.delay == " ") {
+        Message.warning({ message: "前置节点尚未返回测速结果，当前节点暂不判定失败。" });
+      } else {
+        Message.error({ message: "前置节点不可用，链式测速失败。" });
+      }
+      return;
+    }
+  }
+
+  await runDelayInOrder(testNodes, chainedResolveDetour, policy);
+  for (var i = 0; i < testNodes.length; i++) {
+    if (testNodes[i].delay !== undefined) uifStyleNodeConfig[i].delay = testNodes[i].delay;
+    if (testNodes[i].last_probe_delay_ms !== undefined) uifStyleNodeConfig[i].last_probe_delay_ms = testNodes[i].last_probe_delay_ms;
+    if (testNodes[i].last_probe_status !== undefined) uifStyleNodeConfig[i].last_probe_status = testNodes[i].last_probe_status;
+    if (testNodes[i].probe_error !== undefined) uifStyleNodeConfig[i].probe_error = testNodes[i].probe_error;
+    if (testNodes[i].consecutive_failures !== undefined) uifStyleNodeConfig[i].consecutive_failures = testNodes[i].consecutive_failures;
+    if (testNodes[i].quarantined !== undefined) uifStyleNodeConfig[i].quarantined = testNodes[i].quarantined;
+  }
 }
 
 function TestNodeIPInfo(uifStyleNodeConfig) {
@@ -1541,13 +2003,13 @@ function Init() {
 
   // http://127.0.0.1:9528?a=http://127.0.0.1:9413&p=1
   if (urlAddress != null && urlAddress != "") {
-    state.apiAddress = urlAddress;
+    state.apiAddress = ResolveAPIAddress(urlAddress);
     if (urlPwd != null && urlPwd != "") {
       state.password = urlPwd;
     }
   } else {
     var address = GetAPIAddress();
-    state.apiAddress = ResolveAPIAddress(address);
+    state.apiAddress = ResolveAPIAddress(address || state.apiAddress);
     state.password = GetKey();
   }
 

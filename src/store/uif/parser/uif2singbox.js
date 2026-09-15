@@ -3,6 +3,17 @@ import {
   DeleteKeyFromDict
 } from "./utils.js";
 
+// sing-box 1.12.x 已移除 xhttp/splithttp 传输类型，旧订阅快照里仍可能保留
+// 这两个值。若原样写入 transport.type，内核会以 "unknown transport type"
+// 解码失败退出，导致 Clash API 挂掉、节点选择列表全空。这里统一归一为
+// httpupgrade（XHTTP 的 sing-box 原生等价物），其余类型原样保留。
+const normalizeTransportType = (type) => {
+  if (type === 'xhttp' || type === 'splithttp') {
+    return 'httpupgrade'
+  }
+  return type
+}
+
 function Bound(uif_config) {
   var singBoxStyle = DeepCopy(uif_config['setting']);
   var transport = uif_config['transport']
@@ -19,8 +30,10 @@ function Bound(uif_config) {
   singBoxStyle['tag'] = uif_config['tag'];
 
   if (transportProtocol != 'tcp' && transportProtocol != '') {
-    var transportSetting = uif_config['transport']['setting']
-    transportSetting['type'] = transportProtocol
+    // 后端 Transport.Setting 带 omitempty，空 map 会被省略成 undefined，
+    // 这里必须兜底，否则 ws/grpc 等无额外参数节点会在赋值 type 时崩溃。
+    var transportSetting = uif_config['transport']['setting'] || {}
+    transportSetting['type'] = normalizeTransportType(transportProtocol)
     singBoxStyle['transport'] = transportSetting
   }
 
@@ -36,6 +49,12 @@ function Bound(uif_config) {
 
   if (transport['tls_type'] != 'none') {
     singBoxStyle['tls'] = transport['tls']
+    // 防御：hysteria2/tuic/trojan 等协议强制要求 tls.enabled=true，
+    // 某些 parser（或历史快照）生成的 tls 对象可能漏掉 enabled，
+    // 内核会以 "TLS required" 拒绝启动。这里兜底补齐。
+    if (singBoxStyle['tls'] && singBoxStyle['tls']['enabled'] !== true) {
+      singBoxStyle['tls']['enabled'] = true
+    }
   }
 
   if (proxyProtocol == 'hysteria2') {
